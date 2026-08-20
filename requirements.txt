@@ -1,0 +1,2 @@
+# PyLabView Studio hanya menggunakan Python standard library.
+# tkinter harus tersedia dari distribusi Python atau package OS.

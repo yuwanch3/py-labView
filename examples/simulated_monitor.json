@@ -1,0 +1,44 @@
+{
+  "format": "pylabview-project",
+  "version": 1,
+  "name": "Simulated Monitor",
+  "nodes": [
+    {
+      "id": "analog1",
+      "type": "analog_input",
+      "x": 80,
+      "y": 80,
+      "label": "Sensor Suhu Simulasi",
+      "properties": {"channel": "AI0", "minimum": 18.0, "maximum": 32.0}
+    },
+    {
+      "id": "chart1",
+      "type": "chart",
+      "x": 360,
+      "y": 55,
+      "label": "Riwayat Suhu",
+      "properties": {"history": 120}
+    },
+    {
+      "id": "display1",
+      "type": "display",
+      "x": 360,
+      "y": 180,
+      "label": "Suhu Saat Ini",
+      "properties": {}
+    },
+    {
+      "id": "log1",
+      "type": "log",
+      "x": 360,
+      "y": 300,
+      "label": "Log Sensor",
+      "properties": {"prefix": "Suhu: "}
+    }
+  ],
+  "wires": [
+    {"source_node": "analog1", "source_port": "out", "target_node": "chart1", "target_port": "value"},
+    {"source_node": "analog1", "source_port": "out", "target_node": "display1", "target_port": "value"},
+    {"source_node": "analog1", "source_port": "out", "target_node": "log1", "target_port": "value"}
+  ]
+}
