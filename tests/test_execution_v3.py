@@ -1,5 +1,6 @@
 import time
 import unittest
+from threading import Event
 
 from pylabview.execution import CancellationToken, CancelledError, Debugger, RunController, RunSession
 from pylabview.model import Graph, Project
@@ -53,6 +54,25 @@ class ExecutionV3Tests(unittest.TestCase):
         while controller.running and time.monotonic() < deadline: time.sleep(0.01)
         self.assertEqual(controller.last_result.values[source.id], 8)
         self.assertTrue(any(event.kind == "run_completed" for event in controller.drain_events()))
+
+    def test_stop_leaves_resource_cleanup_to_worker_finally(self):
+        released = Event()
+        class Resource:
+            def __init__(self): self.closed = False
+            def close(self): self.closed = True
+        resource = Resource()
+        class Runtime:
+            def run(self, graph, controls, project, vi_id, session, **kwargs):
+                if session.resources is None: session.resources = ResourceManager()
+                session.resources.add("test", resource); released.wait(1)
+                session.token.check()
+        controller = RunController(Runtime()); controller.start(Graph())
+        time.sleep(.03); controller.stop()
+        self.assertFalse(resource.closed); self.assertFalse(controller.join(.02))
+        released.set(); self.assertTrue(controller.join(1)); self.assertTrue(resource.closed)
+
+    def test_controller_join_timeout_is_validated(self):
+        with self.assertRaises(ValueError): RunController(DataflowRuntime()).join(-1)
 
     def test_feedback_state_persists_in_session(self):
         graph = Graph(); feedback = graph.add_node("feedback"); one = constant(graph, "numeric_constant", 1); add = graph.add_node("add")

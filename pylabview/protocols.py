@@ -235,24 +235,37 @@ class ModbusTcpClient:
             raise ValueError("Modbus unit id must be between 0 and 255")
         self.connection, self.unit_id, self.transaction_id = connection, unit_id, 0
         self._lock = Lock()
+        self._io_started = False
 
     def _request(self, function: int, payload: bytes, timeout: float, token: CancellationToken) -> bytes:
         with self._lock:
             try:
                 return self._request_locked(function, payload, timeout, token)
-            except ModbusError:
-                try:
-                    self.connection.close()
-                except OSError:
-                    pass
+            except BaseException:
+                if self._io_started:
+                    try:
+                        self.connection.close()
+                    except (AttributeError, OSError):
+                        pass
                 raise
+            finally:
+                self._io_started = False
 
     def _request_locked(self, function: int, payload: bytes, timeout: float, token: CancellationToken) -> bytes:
+        deadline = time.monotonic() + _timeout(timeout)
+
+        def remaining() -> float:
+            value = deadline - time.monotonic()
+            if value <= 0: raise TimeoutError("Modbus request timed out")
+            return value
+
+        token.check()
         self.transaction_id = (self.transaction_id + 1) & 0xffff
         pdu = bytes((function,)) + payload
         frame = struct.pack(">HHHB", self.transaction_id, 0, len(pdu) + 1, self.unit_id) + pdu
-        self.connection.write(frame, timeout, token)
-        header = self.connection.read(7, timeout, token, "exactly")
+        self._io_started = True
+        self.connection.write(frame, remaining(), token)
+        header = self.connection.read(7, remaining(), token, "exactly")
         transaction, protocol, length, unit = struct.unpack(">HHHB", header)
         if transaction != self.transaction_id:
             raise ModbusError("Modbus transaction id mismatch")
@@ -262,7 +275,7 @@ class ModbusTcpClient:
             raise ModbusError("Modbus unit id mismatch")
         if length < 2 or length > 254:
             raise ModbusError("invalid Modbus length")
-        response = self.connection.read(length - 1, timeout, token, "exactly")
+        response = self.connection.read(length - 1, remaining(), token, "exactly")
         response_function = response[0]
         if response_function == function | 0x80:
             if len(response) != 2:
@@ -271,6 +284,13 @@ class ModbusTcpClient:
         if response_function != function:
             raise ModbusError("Modbus function mismatch")
         return response[1:]
+
+    def _invalid_response(self, message: str) -> None:
+        try:
+            self.connection.close()
+        except (AttributeError, OSError):
+            pass
+        raise ModbusError(message)
 
     def read_holding_registers(self, address: int, quantity: int, timeout: float,
                                token: CancellationToken) -> list[int]:
@@ -281,8 +301,71 @@ class ModbusTcpClient:
         payload = self._request(3, struct.pack(">HH", address, quantity), timeout, token)
         expected = quantity * 2
         if not payload or payload[0] != expected or len(payload) != expected + 1:
-            raise ModbusError("invalid FC03 byte count or payload length")
+            self._invalid_response("invalid FC03 byte count or payload length")
         return list(struct.unpack(">" + "H" * quantity, payload[1:]))
+
+    def read_coils(self, address: int, quantity: int, timeout: float, token: CancellationToken) -> list[bool]:
+        return self._read_bits(1, address, quantity, timeout, token)
+
+    def read_discrete_inputs(self, address: int, quantity: int, timeout: float,
+                             token: CancellationToken) -> list[bool]:
+        return self._read_bits(2, address, quantity, timeout, token)
+
+    def _read_bits(self, function: int, address: int, quantity: int, timeout: float,
+                   token: CancellationToken) -> list[bool]:
+        address = _integer(address, f"FC{function:02d} address")
+        quantity = _integer(quantity, f"FC{function:02d} quantity")
+        if not 0 <= address <= 65535 or not 1 <= quantity <= 2000 or address + quantity > 65536:
+            raise ValueError(f"invalid FC{function:02d} address or quantity")
+        payload = self._request(function, struct.pack(">HH", address, quantity), timeout, token)
+        expected = (quantity + 7) // 8
+        if not payload or payload[0] != expected or len(payload) != expected + 1:
+            self._invalid_response(f"invalid FC{function:02d} byte count or payload length")
+        return [bool(payload[1 + index // 8] & (1 << (index % 8))) for index in range(quantity)]
+
+    def read_input_registers(self, address: int, quantity: int, timeout: float,
+                             token: CancellationToken) -> list[int]:
+        address = _integer(address, "FC04 address"); quantity = _integer(quantity, "FC04 quantity")
+        if not 0 <= address <= 65535 or not 1 <= quantity <= 125 or address + quantity > 65536:
+            raise ValueError("invalid FC04 address or quantity")
+        payload = self._request(4, struct.pack(">HH", address, quantity), timeout, token)
+        expected = quantity * 2
+        if not payload or payload[0] != expected or len(payload) != expected + 1:
+            self._invalid_response("invalid FC04 byte count or payload length")
+        return list(struct.unpack(">" + "H" * quantity, payload[1:]))
+
+    def write_single_coil(self, address: int, value: bool, timeout: float, token: CancellationToken) -> bool:
+        address = _integer(address, "FC05 address")
+        if not 0 <= address <= 65535 or not isinstance(value, bool): raise ValueError("invalid FC05 address or coil value")
+        request = struct.pack(">HH", address, 0xff00 if value else 0)
+        if self._request(5, request, timeout, token) != request: self._invalid_response("FC05 response does not echo request")
+        return value
+
+    def write_multiple_coils(self, address: int, values: list[bool], timeout: float,
+                             token: CancellationToken) -> int:
+        address = _integer(address, "FC15 address")
+        if not isinstance(values, list) or not 1 <= len(values) <= 1968 or any(not isinstance(value, bool) for value in values):
+            raise ValueError("FC15 values must contain 1 to 1968 booleans")
+        if not 0 <= address <= 65535 or address + len(values) > 65536: raise ValueError("invalid FC15 address range")
+        packed = bytearray((len(values) + 7) // 8)
+        for index, value in enumerate(values):
+            if value: packed[index // 8] |= 1 << (index % 8)
+        request = struct.pack(">HHB", address, len(values), len(packed)) + packed
+        response = self._request(15, request, timeout, token)
+        if response != struct.pack(">HH", address, len(values)): self._invalid_response("invalid FC15 response")
+        return len(values)
+
+    def write_multiple_registers(self, address: int, values: list[int], timeout: float,
+                                 token: CancellationToken) -> int:
+        address = _integer(address, "FC16 address")
+        if not isinstance(values, list) or not 1 <= len(values) <= 123: raise ValueError("FC16 requires 1 to 123 registers")
+        registers = [_integer(value, "FC16 register") for value in values]
+        if any(not 0 <= value <= 65535 for value in registers) or not 0 <= address <= 65535 or address + len(values) > 65536:
+            raise ValueError("invalid FC16 address or register value")
+        request = struct.pack(">HHB", address, len(values), len(values) * 2) + struct.pack(">" + "H" * len(values), *registers)
+        response = self._request(16, request, timeout, token)
+        if response != struct.pack(">HH", address, len(values)): self._invalid_response("invalid FC16 response")
+        return len(values)
 
     def write_single_register(self, address: int, value: int, timeout: float,
                               token: CancellationToken) -> int:
@@ -293,7 +376,7 @@ class ModbusTcpClient:
         request = struct.pack(">HH", address, value)
         payload = self._request(6, request, timeout, token)
         if payload != request:
-            raise ModbusError("FC06 response does not echo request")
+            self._invalid_response("FC06 response does not echo request")
         return value
 
     def close(self) -> None:
@@ -338,7 +421,15 @@ class OpcUaAdapter(Protocol):
     def close(self, connection: Any) -> None: ...
 
 
-OPCUA_CAPABILITIES = OpcUaCapabilities()
+try:
+    _asyncua_available = importlib.util.find_spec("asyncua.sync") is not None
+except (ImportError, ModuleNotFoundError, ValueError):
+    _asyncua_available = False
+OPCUA_CAPABILITIES = OpcUaCapabilities(
+    available=_asyncua_available, read=_asyncua_available, write=_asyncua_available,
+    reason=("asyncua sync adapter available; subscriptions are not implemented" if _asyncua_available
+            else "asyncua adapter is not installed"),
+)
 
 
 def _integer(value: Any, name: str) -> int:

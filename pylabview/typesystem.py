@@ -16,8 +16,9 @@ CLUSTER = "cluster"
 WAVEFORM = "waveform"
 VARIANT = "variant"
 ERROR = "error"
+IMAGE = "image"
 
-DATA_TYPES = (NUMERIC, BOOLEAN, STRING, ARRAY, CLUSTER, WAVEFORM, VARIANT, ERROR)
+DATA_TYPES = (NUMERIC, BOOLEAN, STRING, ARRAY, CLUSTER, WAVEFORM, VARIANT, ERROR, IMAGE)
 
 WIRE_COLORS = {
     NUMERIC: "#ff9f1c",
@@ -28,6 +29,7 @@ WIRE_COLORS = {
     WAVEFORM: "#00c2a8",
     VARIANT: "#b0bec5",
     ERROR: "#ef476f",
+    IMAGE: "#557a95",
 }
 
 
@@ -76,6 +78,11 @@ def infer_type(value: Any) -> str:
         return ARRAY
     if isinstance(value, dict):
         return CLUSTER
+    try:
+        from .integrations.vision_adapter import ImageFrame
+        if isinstance(value, ImageFrame): return IMAGE
+    except ImportError:
+        pass
     return VARIANT
 
 
@@ -132,6 +139,10 @@ def coerce(value: Any, data_type: str) -> Any:
         if isinstance(value, dict):
             return ErrorCluster(bool(value["status"]), int(value["code"]), str(value["source"]))
         raise TypeError("value is not error cluster")
+    if data_type == IMAGE:
+        from .integrations.vision_adapter import ImageFrame
+        if not isinstance(value, ImageFrame): raise TypeError("value is not an image frame")
+        return value
     raise AssertionError(data_type)
 
 
