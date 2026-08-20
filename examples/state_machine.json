@@ -1,0 +1,15 @@
+{
+  "format": "pylabview-project", "version": 2, "name": "Simple State Machine", "main_vi": "main",
+  "vis": [{"id": "main", "name": "Main VI", "graph": {"name": "Main VI", "nodes": [
+    {"id": "enabled", "type": "boolean_constant", "x": 40, "y": 60, "label": "Enabled", "properties": {"value": true, "display_type": "boolean"}},
+    {"id": "running", "type": "string_constant", "x": 40, "y": 160, "label": "Running State", "properties": {"value": "RUNNING", "display_type": "string"}},
+    {"id": "idle", "type": "string_constant", "x": 40, "y": 260, "label": "Idle State", "properties": {"value": "IDLE", "display_type": "string"}},
+    {"id": "case", "type": "case", "x": 280, "y": 140, "label": "State Case", "properties": {}},
+    {"id": "display", "type": "display", "x": 500, "y": 150, "label": "Current State", "properties": {"display_type": "string", "style": "default"}}
+  ], "wires": [
+    {"source_node": "enabled", "source_port": "out", "target_node": "case", "target_port": "selector", "data_type": "boolean"},
+    {"source_node": "running", "source_port": "out", "target_node": "case", "target_port": "true", "data_type": "string"},
+    {"source_node": "idle", "source_port": "out", "target_node": "case", "target_port": "false", "data_type": "string"},
+    {"source_node": "case", "source_port": "out", "target_node": "display", "target_port": "value", "data_type": "variant"}
+  ]}, "connector_pane": {"inputs": [], "outputs": []}, "front_panel": {"title": "State Machine", "layout": {}}}]
+}

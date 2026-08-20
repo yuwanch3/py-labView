@@ -1,0 +1,17 @@
+{
+  "format": "pylabview-project", "version": 2, "name": "Waveform Acquisition", "main_vi": "main",
+  "vis": [{"id": "main", "name": "Main VI", "graph": {"name": "Main VI", "nodes": [
+    {"id": "t0", "type": "numeric_constant", "x": 40, "y": 40, "label": "t0", "properties": {"value": 0.0, "display_type": "numeric"}},
+    {"id": "dt", "type": "numeric_constant", "x": 40, "y": 130, "label": "dt", "properties": {"value": 0.1, "display_type": "numeric"}},
+    {"id": "samples", "type": "array_constant", "x": 40, "y": 220, "label": "Samples", "properties": {"value": [1, 3, 2, 5, 4], "display_type": "array"}},
+    {"id": "wave", "type": "waveform_create", "x": 260, "y": 120, "label": "Create Waveform", "properties": {}},
+    {"id": "chart", "type": "chart", "x": 500, "y": 100, "label": "Acquisition Chart", "properties": {"history": 200, "display_type": "waveform_chart", "style": "default"}},
+    {"id": "stats", "type": "waveform_stats", "x": 500, "y": 250, "label": "Statistics", "properties": {}}
+  ], "wires": [
+    {"source_node": "t0", "source_port": "out", "target_node": "wave", "target_port": "t0", "data_type": "numeric"},
+    {"source_node": "dt", "source_port": "out", "target_node": "wave", "target_port": "dt", "data_type": "numeric"},
+    {"source_node": "samples", "source_port": "out", "target_node": "wave", "target_port": "y", "data_type": "array"},
+    {"source_node": "wave", "source_port": "out", "target_node": "chart", "target_port": "value", "data_type": "waveform"},
+    {"source_node": "wave", "source_port": "out", "target_node": "stats", "target_port": "waveform", "data_type": "waveform"}
+  ]}, "connector_pane": {"inputs": [], "outputs": []}, "front_panel": {"title": "Waveform", "layout": {}}}]
+}
