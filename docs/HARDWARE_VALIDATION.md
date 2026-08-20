@@ -14,4 +14,4 @@
 | Verilog subset | Yes | Golden/rejection tests | No board, synthesis timing, or bitstream validation |
 | External RT target | Handshake contract only | Fake socket | No qualified target |
 
-PyLabView Studio 4.0.0 is not safety-rated, medically certified, hard real-time, or qualified for control of hazardous processes. Users must perform device-specific installation, calibration, electrical protection, fault handling, cybersecurity, and acceptance testing.
+PyLabView Studio 4.0.1 is not safety-rated, medically certified, hard real-time, or qualified for control of hazardous processes. Users must perform device-specific installation, calibration, electrical protection, fault handling, cybersecurity, and acceptance testing.
