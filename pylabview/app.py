@@ -9,12 +9,15 @@ from typing import Any
 
 from . import __version__
 from .canvas_editor import DiagramCanvas
-from .front_panel import FrontPanel
+from .front_panel import PanelDesigner
 from .model import (ConnectorTerminal, Graph, NODE_DEFINITIONS, Node, Project,
-                    project_snapshot, restore_project_snapshot)
+                     clone_structure_properties, delete_owned_structure_diagrams,
+                     project_snapshot, restore_project_snapshot, _normalized_panel)
 from .persistence import load_project, save_project
 from .typesystem import DATA_TYPES, compatible, editor_value_text
 from .runtime import DataflowRuntime
+from .execution import RunController
+from .plugins import DEFAULT_PLUGIN_REGISTRY
 
 
 class StudioApp(tk.Tk):
@@ -32,9 +35,13 @@ class StudioApp(tk.Tk):
         self.redo_stack: list[dict[str, Any]] = []
         self.clipboard_node: dict[str, Any] | None = None
         self.runtime = DataflowRuntime()
+        DEFAULT_PLUGIN_REGISTRY.discover()
+        self.controller = RunController(self.runtime)
         self.continuous = False
-        self.after_job: str | None = None
-        self.front_panel: FrontPanel | None = None
+        self.front_panel: PanelDesigner | None = None
+        self.breakpoints: set[str] = set()
+        self.probes: set[str] = set()
+        self.current_diagram_id: str | None = None
         self.property_vars: dict[str, tk.StringVar] = {}
         self._build_style()
         self._build_menu()
@@ -42,6 +49,7 @@ class StudioApp(tk.Tk):
         self._bind_shortcuts()
         self.protocol("WM_DELETE_WINDOW", self.close_app)
         self._update_title()
+        self.after(30, self._poll_runtime)
 
     def _build_style(self) -> None:
         style = ttk.Style(self)
@@ -73,9 +81,14 @@ class StudioApp(tk.Tk):
         run_menu.add_command(label="Run Once", accelerator="F5", command=self.run_once)
         run_menu.add_command(label="Run Continuously", accelerator="F6", command=self.toggle_continuous)
         run_menu.add_command(label="Stop", accelerator="Shift+F6", command=self.stop)
+        run_menu.add_separator()
+        run_menu.add_command(label="Pause", command=self.pause_run)
+        run_menu.add_command(label="Resume", command=self.resume_run)
+        run_menu.add_command(label="Single Step", command=self.step_run)
         menu.add_cascade(label="Run", menu=run_menu)
         view_menu = tk.Menu(menu, tearoff=False)
         view_menu.add_command(label="Front Panel", accelerator="Ctrl+F", command=self.show_front_panel)
+        view_menu.add_command(label="Plugin Status", command=self.show_plugins)
         menu.add_cascade(label="View", menu=view_menu)
         help_menu = tk.Menu(menu, tearoff=False)
         help_menu.add_command(label="Quick Help", command=self.show_help)
@@ -98,6 +111,10 @@ class StudioApp(tk.Tk):
         ttk.Button(toolbar, text="Validate", command=self.validate_current).pack(side="left", padx=2)
         ttk.Button(toolbar, text="Connector", command=self.configure_connector).pack(side="left", padx=2)
         ttk.Button(toolbar, text="Create SubVI", command=self.create_subvi).pack(side="left", padx=2)
+        ttk.Button(toolbar, text="Breakpoint", command=self.toggle_breakpoint).pack(side="left", padx=2)
+        ttk.Button(toolbar, text="Probe", command=self.toggle_probe).pack(side="left", padx=2)
+        ttk.Button(toolbar, text="Open Structure", command=self.open_structure).pack(side="left", padx=2)
+        ttk.Button(toolbar, text="Root Diagram", command=self.open_root_diagram).pack(side="left", padx=2)
         self.zoom_label = ttk.Label(toolbar, text="Ctrl+wheel: zoom")
         self.zoom_label.pack(side="right", padx=8)
 
@@ -105,7 +122,7 @@ class StudioApp(tk.Tk):
         vertical.pack(fill="both", expand=True)
         work = ttk.Panedwindow(vertical, orient="horizontal")
         vertical.add(work, weight=5)
-        console_frame = ttk.LabelFrame(vertical, text="Execution Log", padding=4)
+        console_frame = ttk.Frame(vertical, padding=4)
         vertical.add(console_frame, weight=1)
 
         library = ttk.LabelFrame(work, text="Node Library", padding=6)
@@ -137,18 +154,48 @@ class StudioApp(tk.Tk):
         self.library_tree.bind("<Double-1>", self._library_add)
         ttk.Label(library, text="Double-click to add", foreground="#58677a").pack(pady=(5, 0))
 
-        self.canvas = DiagramCanvas(center, self.graph, self.select_node, self.checkpoint, self.changed, self._connection_error)
+        self.workspace = ttk.Notebook(center)
+        self.workspace.pack(fill="both", expand=True)
+        panel_tab = ttk.Frame(self.workspace)
+        diagram_tab = ttk.Frame(self.workspace)
+        self.workspace.add(panel_tab, text="Front Panel")
+        self.workspace.add(diagram_tab, text="Block Diagram")
+        panel_tools = ttk.Frame(panel_tab, padding=4)
+        panel_tools.pack(fill="x")
+        ttk.Button(panel_tools, text="Edit", command=lambda: self.front_panel.set_mode("edit")).pack(side="left")
+        ttk.Button(panel_tools, text="Operate", command=lambda: self.front_panel.set_mode("operate")).pack(side="left", padx=4)
+        self.project.main.front_panel = self.project.main.front_panel if "items" in self.project.main.front_panel else self.project.to_dict()["vis"][0]["front_panel"]
+        self.front_panel = PanelDesigner(panel_tab, self.graph, self.project.main.front_panel,
+                                         self._panel_changed, self._panel_values_changed)
+        self.project.main.front_panel = self.front_panel.panel
+        self.front_panel.pack(fill="both", expand=True)
+        self.canvas = DiagramCanvas(diagram_tab, self.graph, self.select_node, self.checkpoint, self.changed,
+                                    self._connection_error, self._delete_node_resources)
         self.canvas.pack(fill="both", expand=True)
 
         self.inspector_body = ttk.Frame(inspector)
         self.inspector_body.pack(fill="both", expand=True)
         self.select_node(None)
 
-        self.console = tk.Text(console_frame, height=7, background="#10151d", foreground="#d7e1ef", insertbackground="white", font=("TkFixedFont", 9), state="disabled")
-        scroll = ttk.Scrollbar(console_frame, command=self.console.yview)
+        output_tabs = ttk.Notebook(console_frame)
+        output_tabs.pack(fill="both", expand=True)
+        log_tab, debug_tab = ttk.Frame(output_tabs), ttk.Frame(output_tabs)
+        output_tabs.add(log_tab, text="Execution Log")
+        output_tabs.add(debug_tab, text="Debugger Trace")
+        self.console = tk.Text(log_tab, height=7, background="#10151d", foreground="#d7e1ef", insertbackground="white", font=("TkFixedFont", 9), state="disabled")
+        scroll = ttk.Scrollbar(log_tab, command=self.console.yview)
         self.console.configure(yscrollcommand=scroll.set)
         self.console.pack(side="left", fill="both", expand=True)
         scroll.pack(side="right", fill="y")
+        debug_buttons = ttk.Frame(debug_tab)
+        debug_buttons.pack(fill="x")
+        ttk.Button(debug_buttons, text="Pause", command=self.pause_run).pack(side="left")
+        ttk.Button(debug_buttons, text="Resume", command=self.resume_run).pack(side="left", padx=3)
+        ttk.Button(debug_buttons, text="Step", command=self.step_run).pack(side="left")
+        self.trace_tree = ttk.Treeview(debug_tab, columns=("seq", "event", "node", "value"), show="headings", height=6)
+        for column, width in (("seq", 55), ("event", 120), ("node", 130), ("value", 500)):
+            self.trace_tree.heading(column, text=column.title()); self.trace_tree.column(column, width=width)
+        self.trace_tree.pack(fill="both", expand=True)
         self.status_var = tk.StringVar(value="Ready")
         ttk.Label(self, textvariable=self.status_var, anchor="w", padding=(7, 3)).pack(fill="x")
 
@@ -190,6 +237,8 @@ class StudioApp(tk.Tk):
         self.checkpoint()
         offset = len(self.graph.nodes) % 8
         node = self.graph.add_node(node_type, 80 + offset * 22, 70 + offset * 22)
+        if node_type in ("visual_case", "visual_for"):
+            self._initialize_structure(node)
         self.canvas.selected_node = node.id
         self.changed()
         self.select_node(node.id)
@@ -204,8 +253,19 @@ class StudioApp(tk.Tk):
         self.dirty = True
         self.canvas.statuses = {}
         self._update_title()
-        if self.front_panel:
-            self.front_panel.rebuild(self.graph)
+        if self.front_panel and self.current_diagram_id is None:
+            vi = self.project.vis[self.current_vi_id]
+            self.front_panel.set_document(vi.graph, vi.front_panel)
+            vi.front_panel = self.front_panel.panel
+
+    def _panel_changed(self) -> None:
+        self.project.vis[self.current_vi_id].front_panel = self.front_panel.panel
+        self.dirty = True
+        self._update_title()
+
+    def _panel_values_changed(self, values: dict[str, Any]) -> None:
+        if self.controller.running:
+            self.controller.update_controls(values)
 
     def undo(self) -> None:
         if not self.undo_stack:
@@ -246,6 +306,8 @@ class StudioApp(tk.Tk):
         node = self.graph.add_node(data["type"], data["x"] + 30, data["y"] + 30)
         node.label = data["label"] + " Copy"
         node.properties = copy.deepcopy(data["properties"])
+        if node.type in ("visual_case", "visual_for"):
+            node.properties = self._clone_structure_properties(node.type, node.properties)
         self.clipboard_node["x"], self.clipboard_node["y"] = node.x, node.y
         self.canvas.selected_node = node.id
         self.changed()
@@ -314,8 +376,17 @@ class StudioApp(tk.Tk):
         self.status_var.set(f"Updated {node.label}")
 
     def run_once(self, schedule_next: bool = False) -> None:
+        if self.controller.running:
+            self.status_var.set("Execution is already running")
+            return
         controls = self.front_panel.control_values() if self.front_panel else {}
-        result = self.runtime.run(self.graph, controls, self.project, self.current_vi_id)
+        run_graph = self.project.vis[self.current_vi_id].graph
+        self.controller.start(run_graph, controls, self.project, self.current_vi_id,
+                              continuous=schedule_next, debug=bool(self.breakpoints or self.probes),
+                              breakpoints=self.breakpoints, probes=self.probes)
+        self.status_var.set("Execution started")
+
+    def _apply_result(self, result: Any) -> None:
         self.canvas.set_statuses(result.statuses)
         if self.front_panel:
             self.front_panel.update_values(result.values)
@@ -327,13 +398,18 @@ class StudioApp(tk.Tk):
             self.status_var.set(f"Execution failed: {len(result.errors)} error(s)")
         else:
             self.status_var.set(f"Executed {len(result.values)} node(s) successfully")
-        if schedule_next and self.continuous:
-            self.after_job = self.after(150, self._continuous_step)
 
-    def _continuous_step(self) -> None:
-        self.after_job = None
-        if self.continuous:
-            self.run_once(True)
+    def _poll_runtime(self) -> None:
+        for event in self.controller.drain_events():
+            if event.kind == "result" and event.payload is not None:
+                self._apply_result(event.payload)
+            elif event.kind != "result":
+                self.trace_tree.insert("", "end", values=(event.sequence, event.kind, event.node_id or "",
+                                                            event.value_preview or event.message))
+                children = self.trace_tree.get_children()
+                if len(children) > 1000:
+                    self.trace_tree.delete(*children[:100])
+        self.after(30, self._poll_runtime)
 
     def toggle_continuous(self) -> None:
         if self.continuous:
@@ -347,19 +423,21 @@ class StudioApp(tk.Tk):
 
     def stop(self) -> None:
         self.continuous = False
-        if self.after_job is not None:
-            self.after_cancel(self.after_job)
-            self.after_job = None
+        self.controller.stop()
         self.run_button.configure(text="Continuous")
         self.status_var.set("Execution stopped")
 
+    def pause_run(self) -> None:
+        self.controller.pause(); self.status_var.set("Execution pause requested")
+
+    def resume_run(self) -> None:
+        self.controller.resume(); self.status_var.set("Execution resumed")
+
+    def step_run(self) -> None:
+        self.controller.step(); self.status_var.set("Single step requested")
+
     def show_front_panel(self) -> None:
-        if not self.front_panel or not self.front_panel.winfo_exists():
-            self.front_panel = FrontPanel(self, self.graph)
-        else:
-            self.front_panel.rebuild(self.graph)
-            self.front_panel.deiconify()
-            self.front_panel.lift()
+        self.workspace.select(0)
 
     def new_project(self) -> None:
         if not self._confirm_discard():
@@ -388,16 +466,21 @@ class StudioApp(tk.Tk):
             messagebox.showerror("Open failed", str(exc), parent=self)
             return
         self.stop()
-        self.path = Path(path)
+        migrated = bool(project.migration_report)
+        self.path = None if migrated else Path(path)
         self.undo_stack.clear()
         self.redo_stack.clear()
         self.project = project
         self.current_vi_id = project.main_vi
         self._replace_graph(project.main.graph)
         self._refresh_vi_list()
-        self.dirty = False
+        self.dirty = migrated
         self._update_title()
         self.log(f"Opened {path}")
+        for line in project.migration_report:
+            self.log("MIGRATION " + line)
+        if migrated:
+            self.status_var.set("Legacy project migrated in memory; Save will write a new v3 file")
 
     def save_project(self) -> bool:
         if self.path is None:
@@ -432,6 +515,7 @@ class StudioApp(tk.Tk):
         return True
 
     def _replace_graph(self, graph: Graph) -> None:
+        self.current_diagram_id = None
         self.graph = graph
         if self.current_vi_id in self.project.vis:
             self.project.vis[self.current_vi_id].graph = graph
@@ -439,7 +523,9 @@ class StudioApp(tk.Tk):
         self.canvas.set_graph(graph)
         self.select_node(None)
         if self.front_panel:
-            self.front_panel.rebuild(graph)
+            vi = self.project.vis[self.current_vi_id]
+            vi.front_panel = _normalized_panel(vi.front_panel, graph)
+            self.front_panel.set_document(graph, vi.front_panel)
 
     def _confirm_discard(self) -> bool:
         if not self.dirty:
@@ -451,6 +537,7 @@ class StudioApp(tk.Tk):
 
     def close_app(self) -> None:
         if self._confirm_discard():
+            self.stop()
             self.destroy()
 
     def _update_title(self) -> None:
@@ -516,10 +603,6 @@ class StudioApp(tk.Tk):
         if vi_id == self.project.main_vi:
             messagebox.showerror("Delete VI", "cannot delete main VI", parent=self)
             return
-        if any(n.type == "subvi" and n.properties.get("vi_id") == vi_id
-               for vi in self.project.vis.values() for n in vi.graph.nodes.values()):
-            messagebox.showerror("Delete VI", "VI is referenced by a SubVI node", parent=self)
-            return
         if not messagebox.askyesno("Delete VI", f"Delete {self.project.vis[vi_id].name}?", parent=self):
             return
         self.checkpoint()
@@ -550,6 +633,92 @@ class StudioApp(tk.Tk):
         node.label, node.properties["vi_id"] = target.name, target.id
         self.changed(); self.canvas.redraw()
 
+    def _initialize_structure(self, node: Node) -> None:
+        vi = self.project.vis[self.current_vi_id]
+
+        def identity_diagram(name: str, include_iteration: bool = False) -> tuple[str, Graph]:
+            diagram_id = f"{node.id}-{name}"
+            graph = Graph(f"{node.label} / {name}")
+            source = graph.add_node("structure_input", 80, 100)
+            source.properties["name"] = "value"
+            output = graph.add_node("structure_output", 360, 100)
+            graph.connect(source.id, "out", output.id, "value")
+            if include_iteration:
+                graph.add_node("iteration_terminal", 80, 220)
+            graph.project = self.project
+            vi.subdiagrams[diagram_id] = graph
+            return diagram_id, graph
+
+        if node.type == "visual_case":
+            node.properties["true_diagram"] = identity_diagram("True")[0]
+            node.properties["false_diagram"] = identity_diagram("False")[0]
+        else:
+            node.properties["body_diagram"] = identity_diagram("Body", True)[0]
+
+    def _clone_structure_properties(self, node_type: str, properties: dict[str, Any]) -> dict[str, Any]:
+        return clone_structure_properties(self.project, self.current_vi_id, node_type, properties)
+
+    def _delete_node_resources(self, node: Node) -> None:
+        delete_owned_structure_diagrams(self.project, self.current_vi_id, node)
+
+    def open_structure(self) -> None:
+        node_id = self.canvas.selected_node
+        if not node_id or node_id not in self.graph.nodes:
+            self.status_var.set("Select a visual Case or For Loop structure")
+            return
+        node = self.graph.nodes[node_id]
+        if node.type == "visual_case":
+            choice = messagebox.askyesno("Open Case Structure", "Open True region?\nChoose No for False.", parent=self)
+            diagram_id = str(node.properties.get("true_diagram" if choice else "false_diagram", ""))
+        elif node.type == "visual_for":
+            diagram_id = str(node.properties.get("body_diagram", ""))
+        else:
+            self.status_var.set("Selected node is not a visual structure")
+            return
+        graph = self.project.vis[self.current_vi_id].subdiagrams.get(diagram_id)
+        if not graph:
+            messagebox.showerror("Open Structure", "Structure subdiagram is missing", parent=self); return
+        self.current_diagram_id = diagram_id
+        self.graph = graph
+        self.canvas.set_graph(graph)
+        self.workspace.select(1)
+        self.status_var.set(f"Editing subdiagram: {graph.name}")
+
+    def open_root_diagram(self) -> None:
+        self.current_diagram_id = None
+        self.graph = self.project.vis[self.current_vi_id].graph
+        self.canvas.set_graph(self.graph)
+        self.workspace.select(1)
+        self.status_var.set("Editing root Block Diagram")
+
+    def toggle_breakpoint(self) -> None:
+        node_id = self.canvas.selected_node
+        if not node_id:
+            self.status_var.set("Select a node to toggle its breakpoint"); return
+        if node_id in self.breakpoints:
+            self.breakpoints.remove(node_id); state = "removed"
+        else:
+            self.breakpoints.add(node_id); state = "set"
+        self.status_var.set(f"Breakpoint {state}: {self.graph.nodes[node_id].label}")
+
+    def toggle_probe(self) -> None:
+        wire = self.canvas.selected_wire
+        if not wire:
+            self.status_var.set("Select a wire to toggle its probe"); return
+        key = f"{wire.source_node}:{wire.source_port}->{wire.target_node}:{wire.target_port}"
+        if key in self.probes:
+            self.probes.remove(key); state = "removed"
+        else:
+            self.probes.add(key); state = "set"
+        self.status_var.set(f"Probe {state}: {key}")
+
+    def show_plugins(self) -> None:
+        statuses = DEFAULT_PLUGIN_REGISTRY.discover()
+        lines = [f"{item.plugin_id} {item.version}: {item.state}{' - ' + item.message if item.message else ''}"
+                 for item in statuses]
+        lines.append("\nPlugins execute as trusted Python in this process; they are not sandboxed and are never auto-installed.")
+        messagebox.showinfo("Plugin Status", "\n".join(lines), parent=self)
+
     def configure_connector(self) -> None:
         vi = self.project.vis[self.current_vi_id]
         dialog = tk.Toplevel(self)
@@ -578,22 +747,23 @@ class StudioApp(tk.Tk):
                 valid_outputs = {term.name for term in outputs}
                 input_types = {term.name: term.data_type for term in inputs}
                 output_types = {term.name: term.data_type for term in outputs}
-                affected: list[tuple[str, Any]] = []
+                affected: list[tuple[Graph, Any]] = []
                 for parent_vi in self.project.vis.values():
-                    calls = {node.id for node in parent_vi.graph.nodes.values()
-                             if node.type == "subvi" and node.properties.get("vi_id") == vi.id}
-                    for wire in parent_vi.graph.wires:
-                        invalid_source = wire.source_node in calls and (
-                            wire.source_port not in valid_outputs
-                            or not compatible(output_types[wire.source_port], parent_vi.graph.port_type(
-                                parent_vi.graph.nodes[wire.target_node], "in", wire.target_port)))
-                        invalid_target = wire.target_node in calls and (
-                            wire.target_port not in valid_inputs
-                            or not compatible(parent_vi.graph.port_type(
-                                parent_vi.graph.nodes[wire.source_node], "out", wire.source_port),
-                                input_types[wire.target_port]))
-                        if invalid_source or invalid_target:
-                            affected.append((parent_vi.id, wire))
+                    for parent_graph in (parent_vi.graph, *parent_vi.subdiagrams.values()):
+                        calls = {node.id for node in parent_graph.nodes.values()
+                                 if node.type == "subvi" and node.properties.get("vi_id") == vi.id}
+                        for wire in parent_graph.wires:
+                            invalid_source = wire.source_node in calls and (
+                                wire.source_port not in valid_outputs
+                                or not compatible(output_types[wire.source_port], parent_graph.port_type(
+                                    parent_graph.nodes[wire.target_node], "in", wire.target_port)))
+                            invalid_target = wire.target_node in calls and (
+                                wire.target_port not in valid_inputs
+                                or not compatible(parent_graph.port_type(
+                                    parent_graph.nodes[wire.source_node], "out", wire.source_port),
+                                    input_types[wire.target_port]))
+                            if invalid_source or invalid_target:
+                                affected.append((parent_graph, wire))
             except (KeyError, StopIteration, ValueError, TypeError) as exc: messagebox.showerror("Connector Pane", str(exc), parent=dialog); return
             if affected and not messagebox.askyesno(
                     "Connector Pane", f"Perubahan ini akan menghapus {len(affected)} wire yang tidak lagi valid. Lanjutkan?",
@@ -604,11 +774,10 @@ class StudioApp(tk.Tk):
                 return
             self.checkpoint()
             vi.connector_inputs, vi.connector_outputs = inputs, outputs
-            affected_by_vi: dict[str, set[int]] = {}
-            for parent_id, wire in affected:
-                affected_by_vi.setdefault(parent_id, set()).add(id(wire))
-            for parent_id, wire_ids in affected_by_vi.items():
-                parent_graph = self.project.vis[parent_id].graph
+            affected_by_graph: dict[Graph, set[int]] = {}
+            for parent_graph, wire in affected:
+                affected_by_graph.setdefault(parent_graph, set()).add(id(wire))
+            for parent_graph, wire_ids in affected_by_graph.items():
                 parent_graph.wires = [wire for wire in parent_graph.wires if id(wire) not in wire_ids]
             self.changed(); self.canvas.redraw(); dialog.destroy()
         ttk.Button(dialog, text="Apply", command=apply).pack(pady=8)
@@ -630,7 +799,7 @@ class StudioApp(tk.Tk):
     def show_help(self) -> None:
         messagebox.showinfo(
             "PyLabView Studio Help",
-            "Double-click a library item to add it. Drag a node by its body. Click a yellow output port, then a blue input port to wire them. Select a node or wire and press Delete.\n\nUse F5 for one run, F6 for continuous execution, and Ctrl+mouse-wheel to zoom. Constants and output nodes appear automatically in Front Panel.",
+            "Use the embedded Front Panel and Block Diagram tabs. In Panel Edit mode, drag items or resize from the lower-right handle; Operate mode changes controls.\n\nDouble-click a library item to add it. Wire an output port to an input port. Select a visual structure and use Open Structure to edit its region.\n\nF5 runs once, F6 runs continuously, and Stop requests cooperative cancellation. Select a node for Breakpoint or a wire for Probe.",
             parent=self,
         )
 

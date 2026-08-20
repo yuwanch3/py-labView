@@ -3,7 +3,7 @@ from __future__ import annotations
 import tkinter as tk
 from typing import Callable
 
-from .model import Graph, NODE_DEFINITIONS, Wire
+from .model import Graph, NODE_DEFINITIONS, Node, Wire
 from .typesystem import WIRE_COLORS
 
 
@@ -21,6 +21,7 @@ class DiagramCanvas(tk.Canvas):
         before_change: Callable[[], None],
         on_change: Callable[[], None],
         on_error: Callable[[str], None] | None = None,
+        on_delete_node: Callable[[Node], None] | None = None,
     ) -> None:
         super().__init__(master, background="#151a22", highlightthickness=0, takefocus=True)
         self.graph = graph
@@ -28,6 +29,7 @@ class DiagramCanvas(tk.Canvas):
         self.before_change = before_change
         self.on_change = on_change
         self.on_error = on_error or (lambda _message: None)
+        self.on_delete_node = on_delete_node or (lambda _node: None)
         self.zoom = 1.0
         self.selected_node: str | None = None
         self.selected_wire: Wire | None = None
@@ -190,6 +192,7 @@ class DiagramCanvas(tk.Canvas):
             return
         self.before_change()
         if self.selected_node:
+            self.on_delete_node(self.graph.nodes[self.selected_node])
             self.graph.remove_node(self.selected_node)
             self.selected_node = None
             self.on_select(None)
