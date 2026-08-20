@@ -1,0 +1,22 @@
+{
+  "format": "pylabview-project",
+  "version": 3,
+  "name": "V4 HTML Report",
+  "main_vi": "main",
+  "vis": [{
+    "id": "main",
+    "name": "Main VI",
+    "graph": {
+      "name": "Main VI",
+      "nodes": [
+        {"id": "data", "type": "array_constant", "x": 80, "y": 100, "label": "Report Data", "properties": {"value": [["channel", "value"], ["AI0", 1.25]], "display_type": "array"}},
+        {"id": "report", "type": "report_generate", "x": 320, "y": 100, "label": "HTML Report", "properties": {"path": "v4-example-report.html", "format": "html", "title": "Instrumentation Example"}}
+      ],
+      "wires": [{"source_node": "data", "source_port": "out", "target_node": "report", "target_port": "data", "data_type": "array"}]
+    },
+    "connector_pane": {"inputs": [], "outputs": []},
+    "front_panel": {"title": "", "canvas": {"width": 960, "height": 640, "background": "#e8e8e8"}, "items": [{"id": "panel-data", "kind": "array_control", "terminal_node_id": "data", "bounds": {"x": 24, "y": 24, "width": 210, "height": 120}, "z_index": 0, "properties": {"label": "Report Data"}, "extensions": {}}], "extensions": {}},
+    "subdiagrams": {}
+  }],
+  "extensions": {}
+}

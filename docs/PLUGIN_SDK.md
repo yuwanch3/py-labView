@@ -1,6 +1,6 @@
-# Plugin SDK V3
+# Plugin SDK V4
 
-Plugin adalah package Python tepercaya yang mengekspos entry point group `pylabview.plugins`. Plugin tidak disandbox, tidak dipasang otomatis, dan memiliki hak proses pengguna.
+Plugin adalah package Python tepercaya yang mengekspos entry point group `pylabview.plugins`. Plugin tidak dipasang otomatis dan memiliki hak pengguna, termasuk dalam mode process isolation.
 
 ## Contract
 
@@ -38,4 +38,4 @@ Plugin menyimpan metadata hanya di dictionary `extensions` menggunakan key names
 
 ## Security
 
-Jangan memakai `eval`/`exec` terhadap project content. Validasi path, hostname, size, timeout, dan payload. Plugin manager tidak menyediakan signature verification atau process isolation pada v3; hanya pasang plugin dari sumber yang dipercaya.
+Jangan memakai `eval`/`exec` terhadap project content. Validasi path, hostname, size, timeout, dan payload. V4 dapat mengaktifkan evaluator JSON-only secara opt-in melalui `register_isolated_evaluator(type_id, callable, timeout)`. Callable wajib fungsi/module attribute yang dapat diimpor kembali melalui `module:qualname`; lambda dan closure ditolak sebelum process dibuat. Host memakai request ID, batas 1 MiB, timeout, crash detection, dan terminasi child. Ini crash isolation, **bukan security sandbox**: child tetap memiliki hak OS pengguna. Plugin manager tidak menyediakan signature verification; hanya pasang plugin dari sumber yang dipercaya.

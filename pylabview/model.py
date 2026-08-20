@@ -6,7 +6,7 @@ import copy
 import math
 import uuid
 
-from .typesystem import ARRAY, BOOLEAN, CLUSTER, DATA_TYPES, ERROR, NUMERIC, STRING, VARIANT, WAVEFORM, compatible
+from .typesystem import ARRAY, BOOLEAN, CLUSTER, DATA_TYPES, ERROR, IMAGE, NUMERIC, STRING, VARIANT, WAVEFORM, compatible
 
 
 @dataclass(frozen=True)
@@ -68,7 +68,8 @@ NODE_DEFINITIONS: dict[str, NodeDefinition] = {
     "timer": _d("Timer", "Timing", defaults={"mode": "elapsed"}, output_types=(NUMERIC,)),
     "delay": _d("Delay", "Timing", ("value",), defaults={"seconds": 0.01, "maximum_seconds": 5.0}),
     "timed_loop": _d("Timed Loop", "Timing", defaults={"iterations": 1, "interval": 0.01, "max_iterations": 1000}, output_types=(ARRAY,)),
-    "analog_input": _d("Analog Input", "DAQ", defaults={"driver": "simulated", "channel": "AI0", "minimum": -10.0, "maximum": 10.0}, output_types=(NUMERIC,)),
+    "analog_input": _d("Analog Input", "DAQ", defaults={"driver": "simulated", "channel": "AI0", "minimum": -10.0, "maximum": 10.0, "samples": 1, "rate": 1000.0, "timeout": 2.0}, output_types=(NUMERIC,)),
+    "daq_finite_input": _d("Finite Analog Input", "DAQ", defaults={"driver": "nidaqmx", "channel": "Dev1/ai0", "minimum": -10.0, "maximum": 10.0, "samples": 100, "rate": 1000.0, "timeout": 2.0}, output_types=(ARRAY,)),
     "analog_output": _d("Analog Output", "DAQ", ("value",), (), {"driver": "simulated", "channel": "AO0", "minimum": -10.0, "maximum": 10.0}, input_types=(NUMERIC,)),
     "digital_input": _d("Digital Input", "DAQ", defaults={"driver": "simulated", "channel": "DI0"}, output_types=(BOOLEAN,)),
     "digital_output": _d("Digital Output", "DAQ", ("value",), (), {"driver": "simulated", "channel": "DO0"}, input_types=(BOOLEAN,)),
@@ -111,8 +112,37 @@ NODE_DEFINITIONS: dict[str, NodeDefinition] = {
     "modbus_connect": _d("Modbus TCP Connect", "Network", defaults={"host": "127.0.0.1", "port": 502, "unit_id": 1, "timeout": 2.0}),
     "modbus_read_holding": _d("Modbus Read Holding Registers (FC03)", "Network", ("client",), defaults={"address": 0, "quantity": 1, "timeout": 2.0}, output_types=(ARRAY,)),
     "modbus_write_register": _d("Modbus Write Single Register (FC06)", "Network", ("client", "value"), defaults={"address": 0, "timeout": 2.0}, output_types=(NUMERIC,)),
+    "modbus_read_coils": _d("Modbus Read Coils (FC01)", "Network", ("client",), defaults={"address": 0, "quantity": 1, "timeout": 2.0}, output_types=(ARRAY,)),
+    "modbus_read_discrete": _d("Modbus Read Discrete Inputs (FC02)", "Network", ("client",), defaults={"address": 0, "quantity": 1, "timeout": 2.0}, output_types=(ARRAY,)),
+    "modbus_read_input": _d("Modbus Read Input Registers (FC04)", "Network", ("client",), defaults={"address": 0, "quantity": 1, "timeout": 2.0}, output_types=(ARRAY,)),
+    "modbus_write_coil": _d("Modbus Write Single Coil (FC05)", "Network", ("client", "value"), defaults={"address": 0, "timeout": 2.0}, input_types=(VARIANT, BOOLEAN), output_types=(BOOLEAN,)),
+    "modbus_write_coils": _d("Modbus Write Multiple Coils (FC15)", "Network", ("client", "values"), defaults={"address": 0, "timeout": 2.0}, input_types=(VARIANT, ARRAY), output_types=(NUMERIC,)),
+    "modbus_write_registers": _d("Modbus Write Multiple Registers (FC16)", "Network", ("client", "values"), defaults={"address": 0, "timeout": 2.0}, input_types=(VARIANT, ARRAY), output_types=(NUMERIC,)),
     "serial_open": _d("Serial Open (pyserial required)", "Optional Adapters", defaults={"port": "COM1", "baudrate": 9600, "timeout": 1.0}),
-    "opcua_unavailable": _d("OPC UA (adapter not installed)", "Optional Adapters", outputs=()),
+    "serial_read": _d("Serial Read", "Optional Adapters", ("connection",), defaults={"size": 1024, "mode": "bytes", "encoding": "utf-8"}),
+    "serial_write": _d("Serial Write", "Optional Adapters", ("connection", "data"), defaults={"mode": "bytes", "encoding": "utf-8"}, output_types=(NUMERIC,)),
+    "serial_close": _d("Serial Close", "Optional Adapters", ("connection",), outputs=()),
+    "visa_open": _d("VISA Open", "Instrumentation/VISA", defaults={"resource": "TCPIP0::127.0.0.1::INSTR", "timeout": 2.0, "max_bytes": 1048576}),
+    "visa_write": _d("VISA Write", "Instrumentation/VISA", ("instrument", "text"), input_types=(VARIANT, STRING), output_types=(NUMERIC,)),
+    "visa_query": _d("VISA Query", "Instrumentation/VISA", ("instrument", "text"), input_types=(VARIANT, STRING), output_types=(STRING,)),
+    "visa_read_raw": _d("VISA Read Raw", "Instrumentation/VISA", ("instrument",)),
+    "visa_write_raw": _d("VISA Write Raw", "Instrumentation/VISA", ("instrument", "data"), output_types=(NUMERIC,)),
+    "visa_close": _d("VISA Close", "Instrumentation/VISA", ("instrument",), outputs=()),
+    "opcua_connect": _d("OPC UA Connect", "Instrumentation/OPC UA", defaults={"endpoint": "opc.tcp://127.0.0.1:4840", "timeout": 2.0, "security_note": "Configure certificates/security policy in deployment"}),
+    "opcua_read": _d("OPC UA Read Value", "Instrumentation/OPC UA", ("connection",), defaults={"node_id": "ns=2;s=Value"}),
+    "opcua_write": _d("OPC UA Write Value", "Instrumentation/OPC UA", ("connection", "value"), outputs=(), defaults={"node_id": "ns=2;s=Value"}),
+    "opcua_disconnect": _d("OPC UA Disconnect", "Instrumentation/OPC UA", ("connection",), outputs=()),
+    "image_read": _d("Read Image", "Vision", defaults={"path": "input.png"}, output_types=(IMAGE,)),
+    "camera_capture": _d("Capture Camera Frame", "Vision", defaults={"camera_index": 0}, output_types=(IMAGE,)),
+    "image_grayscale": _d("Grayscale", "Vision", ("image",), input_types=(IMAGE,), output_types=(IMAGE,)),
+    "image_blur": _d("Gaussian Blur", "Vision", ("image",), defaults={"kernel": 5}, input_types=(IMAGE,), output_types=(IMAGE,)),
+    "image_threshold": _d("Threshold", "Vision", ("image",), defaults={"threshold": 127.0, "maximum": 255.0}, input_types=(IMAGE,), output_types=(IMAGE,)),
+    "image_canny": _d("Canny", "Vision", ("image",), defaults={"low": 50.0, "high": 150.0}, input_types=(IMAGE,), output_types=(IMAGE,)),
+    "image_resize": _d("Resize Image", "Vision", ("image",), defaults={"width": 640, "height": 480}, input_types=(IMAGE,), output_types=(IMAGE,)),
+    "template_match": _d("Template Match", "Vision", ("image", "template"), input_types=(IMAGE, IMAGE), output_types=(CLUSTER,)),
+    "image_save": _d("Save Image", "Vision", ("image",), ("error",), {"path": "output.png"}, input_types=(IMAGE,), output_types=(ERROR,)),
+    "image_display": _d("Image Indicator", "Outputs", ("image",), (), {"display_type": "image"}, "indicator", input_types=(IMAGE,)),
+    "report_generate": _d("Generate Report", "Reports", ("data",), ("path", "error"), {"path": "report.html", "format": "html", "title": "PyLabView Report"}, output_types=(STRING, ERROR)),
 }
 
 
@@ -489,12 +519,12 @@ def _normalized_panel(panel: dict[str, Any], graph: Graph) -> dict[str, Any]:
         existing = {item["terminal_node_id"] for item in normalized["items"]}
         candidates = [node for node in graph.nodes.values()
                       if node.id not in existing and node.type in {"numeric_constant", "string_constant", "boolean_constant",
-                                                                   "array_constant", "display", "chart"}]
+                                                                    "array_constant", "display", "chart", "image_display"}]
         for node in candidates:
             index = len(normalized["items"]); column, row = index % 3, index // 3
             kind = {"numeric_constant": "numeric_control", "string_constant": "string_control",
                     "boolean_constant": "boolean_control", "array_constant": "array_control",
-                    "display": "indicator", "chart": "chart"}[node.type]
+                    "display": "indicator", "chart": "chart", "image_display": "image_indicator"}[node.type]
             normalized["items"].append({"id": f"panel-{node.id}", "kind": kind, "terminal_node_id": node.id,
                                         "bounds": {"x": 24 + column * 240, "y": 24 + row * 150, "width": 210, "height": 120},
                                         "z_index": index, "properties": {"label": node.label}, "extensions": {}})
@@ -505,7 +535,7 @@ def _normalized_panel(panel: dict[str, Any], graph: Graph) -> dict[str, Any]:
     kind_map = {
         "numeric_constant": "numeric_control", "string_constant": "string_control",
         "boolean_constant": "boolean_control", "array_constant": "array_control",
-        "display": "indicator", "chart": "chart",
+        "display": "indicator", "chart": "chart", "image_display": "image_indicator",
     }
     for node in graph.nodes.values():
         if node.type not in kind_map:
@@ -538,7 +568,7 @@ def _validate_panel(panel: Any, graph: Graph) -> dict[str, Any]:
     expected_kinds = {
         "numeric_constant": "numeric_control", "string_constant": "string_control",
         "boolean_constant": "boolean_control", "array_constant": "array_control",
-        "display": "indicator", "chart": "chart",
+        "display": "indicator", "chart": "chart", "image_display": "image_indicator",
     }
     for item in panel["items"]:
         fields = {"id", "kind", "terminal_node_id", "bounds", "z_index", "properties", "extensions"}

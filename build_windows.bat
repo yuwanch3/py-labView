@@ -17,7 +17,7 @@ if errorlevel 1 (
 py -3 -m PyInstaller --version >nul 2>nul
 if errorlevel 1 (
     echo Memasang PyInstaller...
-    py -3 -m pip install pyinstaller
+    py -3 -m pip install -r requirements-build.txt
     if errorlevel 1 exit /b 1
 )
 
