@@ -8,7 +8,7 @@ def _isolated_self_test(payload: object) -> object:
     return payload
 
 
-def self_test() -> int:
+def self_test(include_isolation: bool = True) -> int:
     from . import __version__
     from .model import Graph, Project
     from .persistence import load_project
@@ -22,14 +22,15 @@ def self_test() -> int:
     source.properties["value"] = 3
     restored = Project.from_dict(project.to_dict())
     result = DataflowRuntime().run_project(restored)
-    if __version__ != "4.0.0" or result.errors or result.values[source.id] != 3:
+    if __version__ != "4.0.1" or result.errors or result.values[source.id] != 3:
         raise RuntimeError("core model/runtime self-test failed")
     if "add" not in DEFAULT_PLUGIN_REGISTRY.node_definitions:
         raise RuntimeError("builtin plugin registry self-test failed")
     OpcUaAdapter().available  # Capability probing must never crash when asyncua is absent.
-    with IsolatedEvaluatorHost("pylabview.__main__:_isolated_self_test") as host:
-        if host.call({"core": True}, 10) != {"core": True}:
-            raise RuntimeError("core process isolation self-test failed")
+    if include_isolation:
+        with IsolatedEvaluatorHost("pylabview.__main__:_isolated_self_test") as host:
+            if host.call({"core": True}, 10) != {"core": True}:
+                raise RuntimeError("core process isolation self-test failed")
     print(f"PyLabView Studio {__version__} self-test OK")
     return 0
 
@@ -65,6 +66,8 @@ def main() -> int:
     freeze_support()
     if "--self-test-full" in sys.argv[1:]:
         return self_test_full()
+    if "--self-test-frozen" in sys.argv[1:]:
+        return self_test(include_isolation=False)
     if "--self-test" in sys.argv[1:]:
         return self_test()
     from .app import main as gui_main

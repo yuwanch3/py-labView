@@ -24,4 +24,4 @@ Process-isolated plugin evaluators exchange bounded JSON with request IDs. They 
 
 ## Persistence
 
-Application release 4.0.0 deliberately keeps project schema version 3. New behavior is represented by node type/properties and root/panel extension points, so no v3-to-v4 data migration is necessary.
+Application release 4.0.1 deliberately keeps project schema version 3. New behavior is represented by node type/properties and root/panel extension points, so no v3-to-v4 data migration is necessary.
