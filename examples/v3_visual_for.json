@@ -1,0 +1,51 @@
+{
+  "format": "pylabview-project",
+  "version": 3,
+  "name": "V3 Visual For Structure",
+  "main_vi": "main",
+  "vis": [
+    {
+      "id": "main",
+      "name": "Main VI",
+      "graph": {
+        "name": "Main VI",
+        "nodes": [
+          {"id": "values", "type": "array_constant", "x": 50, "y": 100, "label": "Values", "properties": {"value": [10, 10, 10], "display_type": "array"}},
+          {"id": "loop", "type": "visual_for", "x": 300, "y": 100, "label": "Value Plus Iteration", "properties": {"body_diagram": "loop-body", "max_iterations": 1000}},
+          {"id": "display", "type": "display", "x": 560, "y": 100, "label": "Results", "properties": {"display_type": "array", "style": "default"}}
+        ],
+        "wires": [
+          {"source_node": "values", "source_port": "out", "target_node": "loop", "target_port": "array", "data_type": "array"},
+          {"source_node": "loop", "source_port": "out", "target_node": "display", "target_port": "value", "data_type": "array"}
+        ]
+      },
+      "connector_pane": {"inputs": [], "outputs": []},
+      "front_panel": {
+        "title": "Visual For Structure",
+        "canvas": {"width": 960, "height": 640, "background": "#e8e8e8"},
+        "items": [
+          {"id": "panel-values", "kind": "array_control", "terminal_node_id": "values", "bounds": {"x": 40, "y": 50, "width": 300, "height": 120}, "z_index": 0, "properties": {"label": "Values"}, "extensions": {}},
+          {"id": "panel-display", "kind": "indicator", "terminal_node_id": "display", "bounds": {"x": 390, "y": 50, "width": 300, "height": 120}, "z_index": 1, "properties": {"label": "Value Plus Iteration"}, "extensions": {}}
+        ],
+        "extensions": {}
+      },
+      "subdiagrams": {
+        "loop-body": {
+          "name": "Value Plus Iteration / Body",
+          "nodes": [
+            {"id": "input", "type": "structure_input", "x": 40, "y": 80, "label": "Value Tunnel", "properties": {"name": "value"}},
+            {"id": "iteration", "type": "iteration_terminal", "x": 40, "y": 190, "label": "Iteration", "properties": {}},
+            {"id": "add", "type": "add", "x": 260, "y": 110, "label": "Add Iteration", "properties": {}},
+            {"id": "output", "type": "structure_output", "x": 480, "y": 110, "label": "Output Tunnel", "properties": {}}
+          ],
+          "wires": [
+            {"source_node": "input", "source_port": "out", "target_node": "add", "target_port": "a", "data_type": "numeric"},
+            {"source_node": "iteration", "source_port": "out", "target_node": "add", "target_port": "b", "data_type": "numeric"},
+            {"source_node": "add", "source_port": "out", "target_node": "output", "target_port": "value", "data_type": "numeric"}
+          ]
+        }
+      }
+    }
+  ],
+  "extensions": {}
+}

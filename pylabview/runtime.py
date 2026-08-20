@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Lock
@@ -13,6 +14,9 @@ import time
 from .drivers import ChannelConfig, DriverRegistry
 from .model import Graph, NODE_DEFINITIONS, Node, Project
 from .typesystem import ErrorCluster, Waveform, coerce, compatible
+from .execution import CancelledError, RunSession
+from .resources import ResourceManager
+from .protocols import ModbusTcpClient, OPCUA_CAPABILITIES, TcpConnection, UdpEndpoint, open_serial
 
 
 class DataflowError(Exception):
@@ -31,12 +35,15 @@ class RunResult:
 
 class DataflowRuntime:
     def __init__(self, clock: Callable[[], float] = time.monotonic, rng: random.Random | None = None,
-                 max_workers: int = 4, data_root: str | Path | None = None,
-                 drivers: DriverRegistry | None = None) -> None:
+                  max_workers: int = 4, data_root: str | Path | None = None,
+                  drivers: DriverRegistry | None = None, max_sync_workers: int = 64) -> None:
         self.clock = clock
         self.rng = rng or random.Random()
         self.started_at = self.clock()
         self.max_workers = max(1, max_workers)
+        if max_sync_workers < 1:
+            raise ValueError("max_sync_workers must be positive")
+        self.max_sync_workers = max_sync_workers
         self.data_root = Path(data_root or Path.cwd()).resolve()
         self.drivers = drivers or DriverRegistry.with_simulation(self.rng)
         self._daq_configured: dict[tuple[str, str], ChannelConfig] = {}
@@ -53,6 +60,8 @@ class DataflowRuntime:
         indegree = {node_id: 0 for node_id in graph.nodes}
         following: dict[str, list[str]] = {node_id: [] for node_id in graph.nodes}
         for wire in graph.wires:
+            if graph.nodes[wire.target_node].type == "feedback":
+                continue
             indegree[wire.target_node] += 1
             following[wire.source_node].append(wire.target_node)
         ready = [node_id for node_id in graph.nodes if indegree[node_id] == 0]
@@ -88,6 +97,12 @@ class DataflowRuntime:
                 errors.append(f"{node.label}: invalid port configuration")
             if node.type == "subvi" and (not project or node.properties.get("vi_id") not in project.vis):
                 errors.append(f"{node.label}: referenced VI does not exist")
+            if node.type in ("visual_case", "visual_for"):
+                vi = project.vis.get(str(vi_id)) if project and vi_id else None
+                keys = (("true_diagram", "false_diagram") if node.type == "visual_case" else ("body_diagram",))
+                for key in keys:
+                    if not vi or node.properties.get(key) not in vi.subdiagrams:
+                        errors.append(f"{node.label}: referenced subdiagram does not exist: {key}")
             for port in ports:
                 if port not in connected:
                     errors.append(f"{node.label}: missing input '{port}'")
@@ -103,6 +118,10 @@ class DataflowRuntime:
             except (KeyError, StopIteration, ValueError) as exc:
                 errors.append(f"Invalid wire {wire.source_node}:{wire.source_port} -> {wire.target_node}:{wire.target_port}: {exc}")
         if project:
+            try:
+                project.validate_structures()
+            except ValueError as exc:
+                errors.append(str(exc))
             errors.extend(self._validate_call_graph(project, vi_id))
         return list(dict.fromkeys(errors))
 
@@ -117,12 +136,14 @@ class DataflowRuntime:
             if vi_id in visited:
                 return None
             visiting.add(vi_id)
-            for node in project.vis[vi_id].graph.nodes.values():
-                target = node.properties.get("vi_id") if node.type == "subvi" else None
-                if target in project.vis:
-                    error = visit(str(target), trail + [vi_id])
-                    if error:
-                        return error
+            vi = project.vis[vi_id]
+            for graph in (vi.graph, *vi.subdiagrams.values()):
+                for node in graph.nodes.values():
+                    target = node.properties.get("vi_id") if node.type == "subvi" else None
+                    if target in project.vis:
+                        error = visit(str(target), trail + [vi_id])
+                        if error:
+                            return error
             visiting.remove(vi_id)
             visited.add(vi_id)
             return None
@@ -136,30 +157,60 @@ class DataflowRuntime:
         return []
 
     def run(self, graph: Graph, control_values: dict[str, Any] | None = None,
-            project: Project | None = None, vi_id: str | None = None) -> RunResult:
+            project: Project | None = None, vi_id: str | None = None,
+            session: RunSession | None = None, debug: bool = False,
+            graph_scope: str | None = None) -> RunResult:
         project = project or graph.project
+        owns_session = session is None
+        session = session or RunSession()
+        session.debug = session.debug or debug
+        if session.resources is None:
+            session.resources = ResourceManager()
         result = RunResult(statuses={node_id: "idle" for node_id in graph.nodes})
         validation = self.validate(graph, project, vi_id)
         if validation:
             result.errors.extend(validation)
             result.statuses = {node_id: "error" for node_id in graph.nodes}
+            if owns_session:
+                session.close()
             return result
         controls = control_values or {}
+        scope = graph_scope or ("root" if vi_id else "standalone")
         try:
             levels = self._levels(graph)
-            with ThreadPoolExecutor(max_workers=self.max_workers, thread_name_prefix="pylabview") as executor:
+            for level in levels:
+                wait_count = sum(graph.nodes[node_id].type in _WAIT_NODE_TYPES for node_id in level)
+                action_count = sum(graph.nodes[node_id].type in _ACTION_NODE_TYPES for node_id in level)
+                if wait_count > self.max_sync_workers or action_count > self.max_sync_workers:
+                    raise DataflowError(
+                        f"synchronization level exceeds max_sync_workers={self.max_sync_workers}")
+            with ExitStack() as stack:
+                compute_executor = stack.enter_context(ThreadPoolExecutor(
+                    max_workers=1 if session.debug else self.max_workers, thread_name_prefix="pylabview-compute"))
+                wait_executor = stack.enter_context(ThreadPoolExecutor(
+                    max_workers=self.max_sync_workers, thread_name_prefix="pylabview-wait"))
+                action_executor = stack.enter_context(ThreadPoolExecutor(
+                    max_workers=self.max_sync_workers, thread_name_prefix="pylabview-action"))
                 for level in levels:
                     jobs = {}
                     for node_id in level:
+                        session.token.check()
                         node = graph.nodes[node_id]
                         incoming = graph.incoming(node_id)
                         inputs = {}
                         for port, wire in incoming.items():
+                            if node.type == "feedback":
+                                continue
                             value = result.port_values[(wire.source_node, wire.source_port)]
                             expected = graph.port_type(node, "in", port)
                             inputs[port] = value if expected == "variant" else coerce(value, expected)
                         result.statuses[node_id] = "running"
-                        jobs[node_id] = executor.submit(self._timed_evaluate, node, inputs, controls, project, vi_id)
+                        session.debugger.before_node(node_id, session.token)
+                        session.debugger.emit("node_started", node_id)
+                        executor = (wait_executor if node.type in _WAIT_NODE_TYPES else
+                                    action_executor if node.type in _ACTION_NODE_TYPES else compute_executor)
+                        jobs[node_id] = executor.submit(self._timed_evaluate, node, inputs, controls, project,
+                                                        vi_id, scope, session)
                     for node_id in level:  # merge in graph order, independent of completion order
                         node = graph.nodes[node_id]
                         try:
@@ -180,7 +231,16 @@ class DataflowRuntime:
                             result.logs.extend(logs)
                             result.durations[node_id] = duration
                             result.statuses[node_id] = "success"
+                            session.debugger.emit("node_completed", node_id, value=result.values[node_id])
+                            for wire in graph.wires:
+                                if wire.source_node == node_id:
+                                    session.debugger.probe(_wire_key(wire), node_id,
+                                                           result.port_values.get((node_id, wire.source_port)))
+                        except CancelledError:
+                            raise
                         except Exception as exc:
+                            if session.token.cancelled:
+                                raise CancelledError("execution cancelled") from exc
                             result.statuses[node_id] = "error"
                             result.errors.append(f"{node.label}: {exc}")
                     if result.errors:
@@ -198,12 +258,25 @@ class DataflowRuntime:
                             if result.statuses[blocked_id] == "idle":
                                 result.statuses[blocked_id] = "blocked"
                         break
+            if not result.errors:
+                for node in graph.nodes.values():
+                    if node.type == "feedback":
+                        incoming = graph.incoming(node.id).get("value")
+                        if incoming:
+                            key = f"feedback:{vi_id or 'graph'}:{scope}:{node.id}"
+                            session.state[key] = result.port_values[(incoming.source_node, incoming.source_port)]
+        except CancelledError:
+            raise
         except Exception as exc:
             result.errors.append(str(exc))
+        finally:
+            if owns_session:
+                session.close()
         return result
 
     def run_project(self, project: Project, vi_id: str | None = None,
-                    inputs: dict[str, Any] | None = None) -> RunResult:
+                    inputs: dict[str, Any] | None = None, session: RunSession | None = None,
+                    debug: bool = False) -> RunResult:
         target_id = vi_id or project.main_vi
         if target_id not in project.vis:
             return RunResult(errors=["unknown VI"])
@@ -214,24 +287,38 @@ class DataflowRuntime:
             if terminal.name not in provided:
                 return RunResult(errors=[f"{vi.name}: missing connector input '{terminal.name}'"])
             controls[terminal.node_id] = coerce(provided[terminal.name], terminal.data_type)
-        return self.run(vi.graph, controls, project, target_id)
+        return self.run(vi.graph, controls, project, target_id, session=session, debug=debug)
 
     def _timed_evaluate(self, node: Node, inputs: dict[str, Any], controls: dict[str, Any],
-                        project: Project | None, caller_vi: str | None) -> tuple[dict[str, Any], Any, list[str], float]:
+                        project: Project | None, caller_vi: str | None, graph_scope: str,
+                        session: RunSession) -> tuple[dict[str, Any], Any, list[str], float]:
         started = self.clock()
         logs: list[str] = []
-        value = self._evaluate(node, inputs, controls, logs, project, caller_vi)
-        outputs = value if isinstance(value, dict) and node.type in ("cluster_unbundle", "waveform_stats", "file_read", "error_handler", "subvi") else {"out": value}
+        value = self._evaluate(node, inputs, controls, logs, project, caller_vi, graph_scope, session)
+        multi_output = ("cluster_unbundle", "waveform_stats", "file_read", "error_handler", "subvi",
+                         "notifier_wait", "event_wait", "udp_receive")
         definition_outputs = NODE_DEFINITIONS[node.type].outputs
+        outputs = value if isinstance(value, dict) and (node.type in multi_output or len(definition_outputs) > 1) else {"out": value}
         if node.type not in ("subvi",) and len(definition_outputs) == 1 and definition_outputs[0] != "out":
             outputs = {definition_outputs[0]: value}
         return outputs, value, logs, self.clock() - started
 
     def _evaluate(self, node: Node, inputs: dict[str, Any], controls: dict[str, Any], logs: list[str],
-                  project: Project | None = None, caller_vi: str | None = None) -> Any:
+                  project: Project | None = None, caller_vi: str | None = None,
+                  graph_scope: str = "standalone",
+                  session: RunSession | None = None) -> Any:
+        session = session or RunSession(resources=ResourceManager())
+        session.token.check()
         kind = node.type
         if kind in ("numeric_constant", "string_constant", "boolean_constant", "array_constant"):
             return controls.get(node.id, node.properties.get("value"))
+        if kind == "bytes_constant": return bytes.fromhex(str(node.properties.get("hex", "")))
+        if kind == "structure_input": return controls.get(node.id, controls.get(str(node.properties.get("name", "value"))))
+        if kind == "iteration_terminal": return controls.get(node.id, controls.get("iteration", 0))
+        if kind == "structure_output": return inputs["value"]
+        if kind == "feedback":
+            key = f"feedback:{caller_vi or 'graph'}:{graph_scope}:{node.id}"
+            return session.state.get(key, node.properties.get("initial", 0.0))
         if kind in ("add", "subtract", "multiply", "divide", "numeric_min", "numeric_max"):
             a, b = inputs["a"], inputs["b"]
             if kind == "divide" and b == 0:
@@ -294,14 +381,17 @@ class DataflowRuntime:
         if kind == "delay":
             seconds, maximum = float(node.properties.get("seconds", 0)), float(node.properties.get("maximum_seconds", 5))
             if seconds < 0 or seconds > maximum: raise DataflowError("delay outside configured bound")
-            time.sleep(seconds); return inputs["value"]
+            if session.token.wait(seconds): raise CancelledError("execution cancelled")
+            return inputs["value"]
         if kind == "timed_loop":
             count = self._bounded_int(node, "iterations", 1)
             if count > self._bounded_int(node, "max_iterations", 1000): raise DataflowError("timed-loop iteration bound exceeded")
             interval = float(node.properties.get("interval", 0.01))
             if interval < 0 or interval > 5: raise DataflowError("timed-loop interval outside bound")
             ticks = []
-            for _ in range(count): ticks.append(self.clock()); time.sleep(interval)
+            for _ in range(count):
+                session.token.check(); ticks.append(self.clock())
+                if session.token.wait(interval): raise CancelledError("execution cancelled")
             return ticks
         if kind in ("analog_input", "digital_input", "analog_output", "digital_output"):
             return self._daq(node, inputs)
@@ -323,10 +413,116 @@ class DataflowRuntime:
             error = inputs["error"]
             if error.status: logs.append(f"ERROR {error.code}: {error.source}")
             return {"handled": error.status, "message": error.source if error.status else ""}
+        if kind == "queue_create":
+            return self._session_resource(session, caller_vi, node, "queue",
+                                          graph_scope,
+                                          lambda: session.resources.create_queue(self._bounded_int(node, "capacity", 100), str(node.properties.get("type_name", "variant"))))
+        if kind == "queue_put":
+            queue = session.resources.get(inputs["queue"], "queue")
+            queue.put(inputs["value"], float(node.properties.get("timeout", 1)), session.token)
+            return inputs["queue"]
+        if kind == "queue_get":
+            return session.resources.get(inputs["queue"], "queue").get(float(node.properties.get("timeout", 1)), session.token)
+        if kind == "notifier_create":
+            return self._session_resource(session, caller_vi, node, "notifier", graph_scope,
+                                          session.resources.create_notifier)
+        if kind == "notifier_set":
+            return session.resources.get(inputs["notifier"], "notifier").set(inputs["value"])
+        if kind == "notifier_wait":
+            value, generation = session.resources.get(inputs["notifier"], "notifier").wait(
+                int(inputs["generation"]), float(node.properties.get("timeout", 1)), session.token)
+            return {"value": value, "generation": generation}
+        if kind == "event_create":
+            return self._session_resource(session, caller_vi, node, "event",
+                                          graph_scope,
+                                          lambda: session.resources.create_event(str(node.properties.get("name", "event"))))
+        if kind == "event_fire": return session.resources.get(inputs["event"], "event").fire(inputs["value"])
+        if kind == "event_wait":
+            value, generation = session.resources.get(inputs["event"], "event").wait(
+                int(inputs["generation"]), float(node.properties.get("timeout", 1)), session.token)
+            return {"value": value, "generation": generation}
+        if kind == "channel_create":
+            return self._session_resource(session, caller_vi, node, "channel",
+                                          graph_scope,
+                                          lambda: session.resources.create_channel(self._bounded_int(node, "capacity", 100), str(node.properties.get("type_name", "variant"))))
+        if kind == "channel_send":
+            channel = session.resources.get(inputs["channel"], "channel")
+            channel.put(inputs["value"], float(node.properties.get("timeout", 1)), session.token)
+            return inputs["channel"]
+        if kind == "channel_receive":
+            return session.resources.get(inputs["channel"], "channel").get(float(node.properties.get("timeout", 1)), session.token)
+        if kind == "resource_close":
+            session.resources.close(inputs["resource"]); return None
+        if kind == "tcp_connect":
+            return self._session_resource(
+                session, caller_vi, node, "tcp",
+                graph_scope,
+                lambda: session.resources.add("tcp", TcpConnection.connect(
+                    str(node.properties.get("host", "127.0.0.1")), node.properties.get("port", 502),
+                    float(node.properties.get("timeout", 2)), session.token)))
+        if kind == "tcp_read":
+            connection = session.resources.get(inputs["connection"], "tcp")
+            return connection.read(int(node.properties.get("size", 1024)), float(node.properties.get("timeout", 2)),
+                                   session.token, str(node.properties.get("mode", "up_to")),
+                                   bytes.fromhex(str(node.properties.get("delimiter_hex", "0a"))))
+        if kind == "tcp_write":
+            return session.resources.get(inputs["connection"], "tcp").write(
+                inputs["data"], float(node.properties.get("timeout", 2)), session.token)
+        if kind == "udp_open":
+            return self._session_resource(
+                session, caller_vi, node, "udp",
+                graph_scope,
+                lambda: session.resources.add("udp", UdpEndpoint.open(
+                    str(node.properties.get("host", "127.0.0.1")), node.properties.get("port", 0),
+                    float(node.properties.get("timeout", 2)))))
+        if kind == "udp_send":
+            return session.resources.get(inputs["endpoint"], "udp").send(
+                inputs["data"], str(node.properties.get("host", "127.0.0.1")), node.properties.get("port", 9999),
+                float(node.properties.get("timeout", 2)), session.token)
+        if kind == "udp_receive":
+            data, host, port = session.resources.get(inputs["endpoint"], "udp").receive(
+                int(node.properties.get("max_bytes", 65535)), float(node.properties.get("timeout", 2)), session.token)
+            return {"data": data, "host": host, "port": port}
+        if kind == "modbus_connect":
+            return self._session_resource(
+                session, caller_vi, node, "modbus",
+                graph_scope,
+                lambda: session.resources.add("modbus", ModbusTcpClient(
+                    TcpConnection.connect(str(node.properties.get("host", "127.0.0.1")),
+                                          node.properties.get("port", 502),
+                                          float(node.properties.get("timeout", 2)), session.token),
+                    node.properties.get("unit_id", 1))))
+        if kind == "modbus_read_holding":
+            return session.resources.get(inputs["client"], "modbus").read_holding_registers(
+                node.properties.get("address", 0), node.properties.get("quantity", 1),
+                float(node.properties.get("timeout", 2)), session.token)
+        if kind == "modbus_write_register":
+            return session.resources.get(inputs["client"], "modbus").write_single_register(
+                node.properties.get("address", 0), inputs["value"],
+                float(node.properties.get("timeout", 2)), session.token)
+        if kind == "serial_open":
+            return self._session_resource(
+                session, caller_vi, node, "serial",
+                graph_scope,
+                lambda: session.resources.add("serial", open_serial(
+                    str(node.properties.get("port", "COM1")), int(node.properties.get("baudrate", 9600)),
+                    float(node.properties.get("timeout", 1)))))
+        if kind == "opcua_unavailable": raise DataflowError(OPCUA_CAPABILITIES.reason)
+        if kind == "visual_case":
+            diagram_id = str(node.properties.get("true_diagram" if inputs["selector"] else "false_diagram", ""))
+            return self._run_structure(project, caller_vi, diagram_id, inputs["value"], 0, session)
+        if kind == "visual_for":
+            values = inputs["array"]
+            maximum = self._bounded_int(node, "max_iterations", 1000)
+            if len(values) > maximum: raise DataflowError("visual for-loop iteration bound exceeded")
+            diagram_id = str(node.properties.get("body_diagram", ""))
+            return [self._run_structure(project, caller_vi, diagram_id, value, index, session)
+                    for index, value in enumerate(values)]
         if kind == "subvi":
             if not project: raise DataflowError("SubVI requires a project")
             target = str(node.properties.get("vi_id", ""))
-            child = self.run_project(project, target, inputs)
+            child = self.run_project(project, target, inputs, session=session)
+            session.token.check()
             if child.errors: raise DataflowError("; ".join(child.errors))
             logs.extend(child.logs)
             vi = project.vis[target]
@@ -334,7 +530,45 @@ class DataflowRuntime:
         if kind in ("display", "chart"): return inputs["value"]
         if kind == "log":
             value = inputs["value"]; logs.append(f"{node.properties.get('prefix', '')}{value}"); return value
+        from .plugins import DEFAULT_PLUGIN_REGISTRY
+        evaluator = DEFAULT_PLUGIN_REGISTRY.evaluator(kind)
+        if evaluator:
+            return evaluator(node, inputs, session)
         raise DataflowError(f"unknown node type: {kind}")
+
+    def _run_structure(self, project: Project | None, vi_id: str | None, diagram_id: str,
+                       value: Any, iteration: int, session: RunSession) -> Any:
+        if not project or vi_id not in project.vis:
+            raise DataflowError("visual structure requires a project VI")
+        graph = project.vis[str(vi_id)].subdiagrams.get(diagram_id)
+        if not graph:
+            raise DataflowError(f"visual structure subdiagram does not exist: {diagram_id}")
+        controls: dict[str, Any] = {"value": value, "iteration": iteration}
+        for child in graph.nodes.values():
+            if child.type == "structure_input": controls[child.id] = value
+            if child.type == "iteration_terminal": controls[child.id] = iteration
+        result = self.run(graph, controls, project, str(vi_id), session=session, graph_scope=diagram_id)
+        session.token.check()
+        if result.errors: raise DataflowError("; ".join(result.errors))
+        outputs = [result.values[child.id] for child in graph.nodes.values() if child.type == "structure_output"]
+        if len(outputs) != 1: raise DataflowError("structure subdiagram must contain exactly one output tunnel")
+        return outputs[0]
+
+    @staticmethod
+    def _session_resource(session: RunSession, vi_id: str | None, node: Node, kind: str,
+                          graph_scope: str,
+                          create: Callable[[], Any]) -> Any:
+        key = f"resource:{vi_id or 'graph'}:{graph_scope}:{node.id}"
+        ref = session.state.get(key)
+        if ref is not None:
+            try:
+                session.resources.get(ref, kind)
+                return ref
+            except Exception:
+                session.state.pop(key, None)
+        ref = create()
+        session.state[key] = ref
+        return ref
 
     def _daq(self, node: Node, inputs: dict[str, Any]) -> Any:
         driver_name, channel = str(node.properties.get("driver", "simulated")), str(node.properties.get("channel", ""))
@@ -364,3 +598,19 @@ class DataflowRuntime:
         value = int(node.properties.get(name, default))
         if value < 0: raise DataflowError(f"{name} must be non-negative")
         return value
+
+
+def _wire_key(wire: Any) -> str:
+    return f"{wire.source_node}:{wire.source_port}->{wire.target_node}:{wire.target_port}"
+
+
+_WAIT_NODE_TYPES = {
+    "delay", "timed_loop", "queue_get", "notifier_wait", "event_wait", "channel_receive",
+    "tcp_connect", "tcp_read", "udp_receive", "modbus_connect", "modbus_read_holding",
+    "serial_open", "subvi", "visual_case", "visual_for",
+}
+
+_ACTION_NODE_TYPES = {
+    "queue_put", "notifier_set", "event_fire", "channel_send", "tcp_write", "udp_send",
+    "modbus_write_register", "resource_close",
+}

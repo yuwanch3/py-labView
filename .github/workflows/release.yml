@@ -40,6 +40,14 @@ jobs:
           }
           Get-Item "dist/PyLabViewStudio.exe" | Format-List Name,Length,LastWriteTime
 
+      - name: Frozen self-test
+        shell: pwsh
+        run: |
+          $process = Start-Process ".\dist\PyLabViewStudio.exe" -ArgumentList "--self-test" -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            throw "Frozen self-test failed with exit code $($process.ExitCode)"
+          }
+
       - name: Create checksum
         shell: pwsh
         run: |

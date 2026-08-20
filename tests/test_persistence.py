@@ -27,7 +27,7 @@ class PersistenceTests(unittest.TestCase):
         self.assertFalse(result.errors)
         self.assertEqual(len(result.logs), 1)
 
-    def test_v1_is_migrated_to_project_v2(self):
+    def test_v1_is_migrated_to_project_v3(self):
         legacy = {"format": "pylabview-project", "version": 1, "name": "Old", "nodes": [], "wires": []}
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "old.json"
@@ -35,7 +35,7 @@ class PersistenceTests(unittest.TestCase):
             path.write_text(json.dumps(legacy), encoding="utf-8")
             project = load_project(path)
         self.assertEqual(project.main.graph.name, "Old")
-        self.assertEqual(project.to_dict()["version"], 2)
+        self.assertEqual(project.to_dict()["version"], 3)
 
     def test_invalid_v2_schema_is_rejected(self):
         data = Project().to_dict()

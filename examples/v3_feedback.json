@@ -1,0 +1,39 @@
+{
+  "format": "pylabview-project",
+  "version": 3,
+  "name": "V3 Stateful Feedback",
+  "main_vi": "main",
+  "vis": [
+    {
+      "id": "main",
+      "name": "Main VI",
+      "graph": {
+        "name": "Main VI",
+        "nodes": [
+          {"id": "one", "type": "numeric_constant", "x": 40, "y": 180, "label": "Increment", "properties": {"value": 1, "display_type": "numeric"}},
+          {"id": "feedback", "type": "feedback", "x": 40, "y": 60, "label": "Previous Value", "properties": {"initial": 0}},
+          {"id": "add", "type": "add", "x": 280, "y": 90, "label": "Increment State", "properties": {}},
+          {"id": "display", "type": "display", "x": 500, "y": 90, "label": "Current Value", "properties": {"display_type": "numeric", "style": "default"}}
+        ],
+        "wires": [
+          {"source_node": "feedback", "source_port": "out", "target_node": "add", "target_port": "a", "data_type": "variant"},
+          {"source_node": "one", "source_port": "out", "target_node": "add", "target_port": "b", "data_type": "numeric"},
+          {"source_node": "add", "source_port": "out", "target_node": "feedback", "target_port": "value", "data_type": "numeric"},
+          {"source_node": "add", "source_port": "out", "target_node": "display", "target_port": "value", "data_type": "numeric"}
+        ]
+      },
+      "connector_pane": {"inputs": [], "outputs": []},
+      "front_panel": {
+        "title": "Stateful Feedback",
+        "canvas": {"width": 960, "height": 640, "background": "#e8e8e8"},
+        "items": [
+          {"id": "panel-one", "kind": "numeric_control", "terminal_node_id": "one", "bounds": {"x": 40, "y": 50, "width": 210, "height": 120}, "z_index": 0, "properties": {"label": "Increment"}, "extensions": {}},
+          {"id": "panel-display", "kind": "indicator", "terminal_node_id": "display", "bounds": {"x": 300, "y": 50, "width": 240, "height": 120}, "z_index": 1, "properties": {"label": "Current Value"}, "extensions": {}}
+        ],
+        "extensions": {}
+      },
+      "subdiagrams": {}
+    }
+  ],
+  "extensions": {}
+}

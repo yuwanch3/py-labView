@@ -1,32 +1,27 @@
-# Enterprise Roadmap
+# Enterprise Roadmap Setelah V3
 
 Dokumen ini menyatakan arah, bukan fitur yang sudah tersedia.
 
-## Fase 1: Fondasi Produksi
+## Stabilization
 
-- Schema evolution bertanda tangan, audit trail, role-based access, package/plugin trust, dan recovery dokumen.
-- Scheduler cancellation/asynchronous, resource lifecycle, structured telemetry, benchmarking, dan soak test.
-- UI connector pane grafis, frame visual bersarang, debugging probe/breakpoint, dan diff/merge VI.
+- Process isolation untuk plugin, signed package policy, recovery journal, audit trail, RBAC, dan secrets store.
+- Connector pane grafis, richer typed arrays/clusters, conditional/auto-index tunnel, shift-register UI boundary, multi-frame structure navigation, dan VI diff/merge.
+- TLS adapter, serial hardware qualification, Modbus interoperability matrix, reconnect policy, dan packet/fault soak testing.
+- OPC UA adapter konkret hanya setelah certificate/security policy, namespace, StatusCode/timestamp, subscription, dan reconnect tervalidasi terhadap server nyata.
 
-## Fase 2: DAQ dan Integrasi
+## Hardware
 
-- Plugin nyata per vendor dengan capability discovery, calibration, buffering, trigger, sample clock, dan integration test pada hardware.
-- Serial, TCP, OPC UA, dan Modbus dengan timeout/retry eksplisit serta secrets management.
-- Tidak ada dukungan NI-DAQmx dalam v2 ini. Integrasi tersebut baru boleh diklaim setelah adapter resmi dan validasi hardware tersedia.
+- Driver vendor nyata memerlukan capability discovery, calibration, buffering, trigger/sample clock, lifecycle, hardware-in-loop test, dan daftar perangkat yang didukung.
+- Tidak ada dukungan NI-DAQmx dalam core v3. Simulated DAQ bukan bukti kompatibilitas hardware.
 
-## Fase 3: Real-Time
+## Real-Time
 
-- Runtime terpisah yang deterministik, deployment protocol, watchdog, health monitoring, bounded memory, dan target OS real-time.
-- Analisis deadline/WCET dan priority scheduling. `ThreadPoolExecutor` desktop v2 bukan runtime real-time.
+- Runtime proses terpisah, bounded allocation, deployment protocol, watchdog, priority scheduling, WCET/deadline analysis, dan target OS real-time.
+- `ThreadPoolExecutor` desktop dan cooperative cancellation v3 bukan hard real-time atau safety-rated.
 
-## Fase 4: FPGA
+## FPGA dan Vision
 
-- IR statis tersendiri, fixed-point type, synthesis backend, timing/resource report, simulator cycle-accurate, dan toolchain hardware vendor.
-- Node loop fungsional desktop tidak dianggap sebagai FPGA compiler.
+- FPGA memerlukan IR statis/fixed-point, synthesis backend vendor, cycle-accurate simulation, dan timing/resource report.
+- Vision memerlukan typed image buffers, camera backend, validated operators, dataset regression, dan optional acceleration.
 
-## Fase 5: Vision
-
-- Buffer gambar bertipe, pipeline streaming, backend kamera, operator vision tervalidasi, akselerasi opsional, dan dataset regression.
-- Vision tidak disertakan dalam v2.
-
-Setiap fase memerlukan threat model, SBOM, qualification matrix, dokumentasi keselamatan, dan batas dukungan yang dapat diaudit sebelum dipakai pada proses kritis.
+Setiap klaim produksi memerlukan threat model, SBOM, support matrix, signing, qualification evidence, dan dokumentasi keselamatan. V3 belum certified untuk proses kritis.

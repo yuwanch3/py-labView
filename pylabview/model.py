@@ -48,10 +48,10 @@ NODE_DEFINITIONS: dict[str, NodeDefinition] = {
     "sine": _d("Sine", "Numeric", ("x",), input_types=(NUMERIC,), output_types=(NUMERIC,)),
     "compare": _d("Compare", "Logic", ("a", "b"), defaults={"operator": ">"}, input_types=(VARIANT, VARIANT), output_types=(BOOLEAN,)),
     "select": _d("Select", "Structures", ("condition", "true", "false"), input_types=(BOOLEAN, VARIANT, VARIANT)),
-    "case": _d("Case", "Structures", ("selector", "true", "false"), input_types=(BOOLEAN, VARIANT, VARIANT)),
-    "sequence": _d("Sequence", "Structures", ("first", "second"), input_types=(VARIANT, VARIANT)),
-    "for_loop": _d("For Loop", "Structures", ("array",), defaults={"max_iterations": 1000, "operation": "identity", "scale": 1.0}, input_types=(ARRAY,), output_types=(ARRAY,)),
-    "while_loop": _d("While Loop", "Structures", ("initial",), defaults={"max_iterations": 100, "condition": "less_than", "limit": 10.0, "step": 1.0}, input_types=(NUMERIC,), output_types=(NUMERIC,)),
+    "case": _d("Legacy Functional Case", "Legacy Structures", ("selector", "true", "false"), input_types=(BOOLEAN, VARIANT, VARIANT)),
+    "sequence": _d("Legacy Functional Sequence", "Legacy Structures", ("first", "second"), input_types=(VARIANT, VARIANT)),
+    "for_loop": _d("Legacy Functional For Loop", "Legacy Structures", ("array",), defaults={"max_iterations": 1000, "operation": "identity", "scale": 1.0}, input_types=(ARRAY,), output_types=(ARRAY,)),
+    "while_loop": _d("Legacy Functional While Loop", "Legacy Structures", ("initial",), defaults={"max_iterations": 100, "condition": "less_than", "limit": 10.0, "step": 1.0}, input_types=(NUMERIC,), output_types=(NUMERIC,)),
     "boolean_and": _d("AND", "Boolean", ("a", "b"), input_types=(BOOLEAN, BOOLEAN), output_types=(BOOLEAN,)),
     "boolean_or": _d("OR", "Boolean", ("a", "b"), input_types=(BOOLEAN, BOOLEAN), output_types=(BOOLEAN,)),
     "boolean_not": _d("NOT", "Boolean", ("value",), input_types=(BOOLEAN,), output_types=(BOOLEAN,)),
@@ -82,6 +82,37 @@ NODE_DEFINITIONS: dict[str, NodeDefinition] = {
     "chart": _d("Waveform Chart", "Outputs", ("value",), (), {"history": 100, "display_type": "waveform_chart", "style": "default"}, "chart"),
     "log": _d("Log Output", "Outputs", ("value",), (), {"prefix": ""}),
     "subvi": _d("SubVI", "Project", defaults={"vi_id": ""}),
+    "feedback": _d("Feedback Node", "Structures", ("value",), defaults={"initial": 0.0}),
+    "visual_case": _d("Case Structure", "Structures", ("selector", "value"), defaults={"true_diagram": "", "false_diagram": ""}, input_types=(BOOLEAN, VARIANT)),
+    "visual_for": _d("For Loop Structure", "Structures", ("array",), defaults={"body_diagram": "", "max_iterations": 1000}, output_types=(ARRAY,)),
+    "structure_input": _d("Structure Input Tunnel", "Structure Internals", defaults={"name": "value"}),
+    "iteration_terminal": _d("Iteration Terminal", "Structure Internals", output_types=(NUMERIC,)),
+    "structure_output": _d("Structure Output Tunnel", "Structure Internals", ("value",)),
+    "queue_create": _d("Create Queue", "Synchronization", defaults={"capacity": 100, "type_name": "variant"}),
+    "queue_put": _d("Queue Put", "Synchronization", ("queue", "value"), defaults={"timeout": 1.0}),
+    "queue_get": _d("Queue Get", "Synchronization", ("queue",), defaults={"timeout": 1.0}),
+    "notifier_create": _d("Create Notifier", "Synchronization"),
+    "notifier_set": _d("Set Notifier", "Synchronization", ("notifier", "value")),
+    "notifier_wait": _d("Wait Notifier", "Synchronization", ("notifier", "generation"), ("value", "generation"), {"timeout": 1.0}),
+    "event_create": _d("Create Named Event", "Synchronization", defaults={"name": "event"}),
+    "event_fire": _d("Fire Event", "Synchronization", ("event", "value")),
+    "event_wait": _d("Wait Event", "Synchronization", ("event", "generation"), ("value", "generation"), {"timeout": 1.0}),
+    "channel_create": _d("Create Message Channel", "Synchronization", defaults={"capacity": 100, "type_name": "variant"}),
+    "channel_send": _d("Channel Send", "Synchronization", ("channel", "value"), defaults={"timeout": 1.0}),
+    "channel_receive": _d("Channel Receive", "Synchronization", ("channel",), defaults={"timeout": 1.0}),
+    "resource_close": _d("Close Resource", "Synchronization", ("resource",), outputs=()),
+    "bytes_constant": _d("Bytes", "Constants", defaults={"hex": ""}),
+    "tcp_connect": _d("TCP Connect", "Network", defaults={"host": "127.0.0.1", "port": 502, "timeout": 2.0}),
+    "tcp_read": _d("TCP Read", "Network", ("connection",), defaults={"size": 1024, "timeout": 2.0, "mode": "up_to", "delimiter_hex": "0a"}),
+    "tcp_write": _d("TCP Write", "Network", ("connection", "data"), defaults={"timeout": 2.0}, output_types=(NUMERIC,)),
+    "udp_open": _d("UDP Open", "Network", defaults={"host": "127.0.0.1", "port": 0, "timeout": 2.0}),
+    "udp_send": _d("UDP Send To", "Network", ("endpoint", "data"), defaults={"host": "127.0.0.1", "port": 9999, "timeout": 2.0}, output_types=(NUMERIC,)),
+    "udp_receive": _d("UDP Receive From", "Network", ("endpoint",), ("data", "host", "port"), {"max_bytes": 65535, "timeout": 2.0}),
+    "modbus_connect": _d("Modbus TCP Connect", "Network", defaults={"host": "127.0.0.1", "port": 502, "unit_id": 1, "timeout": 2.0}),
+    "modbus_read_holding": _d("Modbus Read Holding Registers (FC03)", "Network", ("client",), defaults={"address": 0, "quantity": 1, "timeout": 2.0}, output_types=(ARRAY,)),
+    "modbus_write_register": _d("Modbus Write Single Register (FC06)", "Network", ("client", "value"), defaults={"address": 0, "timeout": 2.0}, output_types=(NUMERIC,)),
+    "serial_open": _d("Serial Open (pyserial required)", "Optional Adapters", defaults={"port": "COM1", "baudrate": 9600, "timeout": 1.0}),
+    "opcua_unavailable": _d("OPC UA (adapter not installed)", "Optional Adapters", outputs=()),
 }
 
 
@@ -245,6 +276,7 @@ class VirtualInstrument:
     connector_inputs: list[ConnectorTerminal] = field(default_factory=list)
     connector_outputs: list[ConnectorTerminal] = field(default_factory=list)
     front_panel: dict[str, Any] = field(default_factory=lambda: {"title": "", "layout": {}})
+    subdiagrams: dict[str, Graph] = field(default_factory=dict)
 
     @classmethod
     def create(cls, name: str) -> "VirtualInstrument":
@@ -257,6 +289,8 @@ class Project:
         vi = VirtualInstrument.create("Main VI")
         self.vis: dict[str, VirtualInstrument] = {vi.id: vi}
         self.main_vi = vi.id
+        self.extensions: dict[str, Any] = {}
+        self.migration_report: list[str] = []
         self._bind_graphs()
 
     @property
@@ -284,7 +318,8 @@ class Project:
             raise ValueError("cannot delete main VI")
         if vi_id not in self.vis:
             raise ValueError("unknown VI")
-        if any(n.type == "subvi" and n.properties.get("vi_id") == vi_id for vi in self.vis.values() for n in vi.graph.nodes.values()):
+        if any(n.type == "subvi" and n.properties.get("vi_id") == vi_id
+               for vi in self.vis.values() for graph in _vi_graphs(vi) for n in graph.nodes.values()):
             raise ValueError("VI is referenced by a SubVI node")
         del self.vis[vi_id]
 
@@ -294,30 +329,38 @@ class Project:
         self.main_vi = vi_id
 
     def to_dict(self) -> dict[str, Any]:
-        return {"format": "pylabview-project", "version": 2, "name": self.name, "main_vi": self.main_vi,
+        return {"format": "pylabview-project", "version": 3, "name": self.name, "main_vi": self.main_vi,
                 "vis": [{"id": vi.id, "name": vi.name, "graph": vi.graph.graph_dict(),
-                         "connector_pane": {"inputs": [asdict(t) for t in vi.connector_inputs], "outputs": [asdict(t) for t in vi.connector_outputs]},
-                         "front_panel": copy.deepcopy(vi.front_panel)} for vi in self.vis.values()]}
+                          "connector_pane": {"inputs": [asdict(t) for t in vi.connector_inputs], "outputs": [asdict(t) for t in vi.connector_outputs]},
+                          "front_panel": copy.deepcopy(_normalized_panel(vi.front_panel, vi.graph)),
+                          "subdiagrams": {diagram_id: graph.graph_dict() for diagram_id, graph in vi.subdiagrams.items()}}
+                         for vi in self.vis.values()], "extensions": copy.deepcopy(self.extensions)}
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Project":
         try:
             if not isinstance(data, dict):
                 raise ValueError("project must be an object")
-            required = {"format", "version", "name", "main_vi", "vis"}
+            version = data.get("version")
+            required = {"format", "version", "name", "main_vi", "vis"} | ({"extensions"} if version == 3 else set())
             if set(data) != required:
-                raise ValueError("invalid project v2 schema")
-            if data["format"] != "pylabview-project" or type(data["version"]) is not int or data["version"] != 2:
+                raise ValueError(f"invalid project v{version} schema")
+            if data["format"] != "pylabview-project" or type(version) is not int or version not in (2, 3):
                 raise ValueError("unsupported project format version")
             if (not isinstance(data["name"], str) or not isinstance(data["main_vi"], str) or not data["main_vi"]
                     or not isinstance(data["vis"], list) or not data["vis"]):
                 raise ValueError("invalid project fields")
             project = cls.__new__(cls)
             project.name, project.main_vi, project.vis = data["name"], data["main_vi"], {}
+            project.extensions = copy.deepcopy(data.get("extensions", {}))
+            project.migration_report = []
+            if not isinstance(project.extensions, dict):
+                raise ValueError("project extensions must be an object")
             vi_names: set[str] = set()
             terminal_fields = {"name", "node_id", "port", "data_type"}
             for item in data["vis"]:
-                if not isinstance(item, dict) or set(item) != {"id", "name", "graph", "connector_pane", "front_panel"}:
+                vi_fields = {"id", "name", "graph", "connector_pane", "front_panel"} | ({"subdiagrams"} if version == 3 else set())
+                if not isinstance(item, dict) or set(item) != vi_fields:
                     raise ValueError("invalid VI schema")
                 if (not isinstance(item["id"], str) or not item["id"] or item["id"] in project.vis
                         or not isinstance(item["name"], str) or not item["name"]
@@ -341,22 +384,33 @@ class Project:
                         parsed.append(ConnectorTerminal(**terminal))
                     terminals.append(parsed)
                 graph = Graph.from_dict(item["graph"])
+                subdiagrams: dict[str, Graph] = {}
+                raw_subdiagrams = item.get("subdiagrams", {})
+                if not isinstance(raw_subdiagrams, dict) or any(not isinstance(key, str) or not key for key in raw_subdiagrams):
+                    raise ValueError("invalid subdiagram schema")
+                for diagram_id, diagram_data in raw_subdiagrams.items():
+                    subdiagrams[diagram_id] = Graph.from_dict(diagram_data)
+                panel = _validate_panel(item["front_panel"], graph) if version == 3 else _normalized_panel(item["front_panel"], graph)
                 project.vis[item["id"]] = VirtualInstrument(
-                    item["id"], item["name"], graph, terminals[0], terminals[1], copy.deepcopy(item["front_panel"])
+                    item["id"], item["name"], graph, terminals[0], terminals[1], panel, subdiagrams
                 )
             if project.main_vi not in project.vis:
                 raise ValueError("main_vi references a missing VI")
             project._bind_graphs()
             for vi in project.vis.values():
-                wires, vi.graph.wires = vi.graph.wires, []
-                for wire in wires:
-                    vi.graph.connect(wire.source_node, wire.source_port, wire.target_node, wire.target_port)
+                for graph in _vi_graphs(vi):
+                    wires, graph.wires = graph.wires, []
+                    for wire in wires:
+                        graph.connect(wire.source_node, wire.source_port, wire.target_node, wire.target_port)
+            project.validate_structures()
             project.validate_connectors()
+            if version == 2:
+                project.migration_report = ["Migrated project v2 to v3", "Generated free-layout Front Panel bounds"]
             return project
         except ValueError:
             raise
         except (AttributeError, KeyError, StopIteration, TypeError) as exc:
-            raise ValueError("invalid project v2 schema") from exc
+            raise ValueError("invalid project schema") from exc
 
     @classmethod
     def migrate_v1(cls, data: dict[str, Any]) -> "Project":
@@ -365,6 +419,7 @@ class Project:
         vi = project.main
         vi.name, vi.graph = graph.name, graph
         project._bind_graphs()
+        project.migration_report = ["Migrated legacy graph v1 to project v3", "Generated free-layout Front Panel bounds"]
         return project
 
     def validate_connectors(self) -> None:
@@ -388,9 +443,211 @@ class Project:
                     if not compatible(vi.graph.port_type(node, "out", term.port), term.data_type):
                         raise ValueError(f"connector type mismatch: {term.name}")
 
+    def validate_structures(self) -> None:
+        for vi in self.vis.values():
+            dependencies: dict[str, set[str]] = {diagram_id: set() for diagram_id in vi.subdiagrams}
+            for graph in _vi_graphs(vi):
+                for node in graph.nodes.values():
+                    keys = (("true_diagram", "false_diagram") if node.type == "visual_case" else
+                            ("body_diagram",) if node.type == "visual_for" else ())
+                    for key in keys:
+                        diagram_id = node.properties.get(key)
+                        if not isinstance(diagram_id, str) or not diagram_id or diagram_id not in vi.subdiagrams:
+                            raise ValueError(f"{node.label}: invalid structure subdiagram reference '{key}'")
+                        for owner_id, owner_graph in vi.subdiagrams.items():
+                            if graph is owner_graph:
+                                dependencies[owner_id].add(diagram_id)
+                                break
+            visiting: set[str] = set()
+            visited: set[str] = set()
+
+            def visit(diagram_id: str) -> None:
+                if diagram_id in visiting:
+                    raise ValueError("recursive visual structure subdiagram")
+                if diagram_id in visited:
+                    return
+                visiting.add(diagram_id)
+                for child_id in dependencies[diagram_id]:
+                    visit(child_id)
+                visiting.remove(diagram_id)
+                visited.add(diagram_id)
+
+            for diagram_id in dependencies:
+                visit(diagram_id)
+
     def _bind_graphs(self) -> None:
         for vi in self.vis.values():
             vi.graph.project = self
+            for graph in vi.subdiagrams.values():
+                graph.project = self
+
+
+def _normalized_panel(panel: dict[str, Any], graph: Graph) -> dict[str, Any]:
+    if isinstance(panel, dict) and set(panel) == {"title", "canvas", "items", "extensions"}:
+        normalized = copy.deepcopy(panel)
+        normalized["items"] = [item for item in normalized["items"] if item.get("terminal_node_id") in graph.nodes]
+        existing = {item["terminal_node_id"] for item in normalized["items"]}
+        candidates = [node for node in graph.nodes.values()
+                      if node.id not in existing and node.type in {"numeric_constant", "string_constant", "boolean_constant",
+                                                                   "array_constant", "display", "chart"}]
+        for node in candidates:
+            index = len(normalized["items"]); column, row = index % 3, index // 3
+            kind = {"numeric_constant": "numeric_control", "string_constant": "string_control",
+                    "boolean_constant": "boolean_control", "array_constant": "array_control",
+                    "display": "indicator", "chart": "chart"}[node.type]
+            normalized["items"].append({"id": f"panel-{node.id}", "kind": kind, "terminal_node_id": node.id,
+                                        "bounds": {"x": 24 + column * 240, "y": 24 + row * 150, "width": 210, "height": 120},
+                                        "z_index": index, "properties": {"label": node.label}, "extensions": {}})
+        return _validate_panel(normalized, graph)
+    title = str(panel.get("title", "")) if isinstance(panel, dict) else ""
+    items: list[dict[str, Any]] = []
+    index = 0
+    kind_map = {
+        "numeric_constant": "numeric_control", "string_constant": "string_control",
+        "boolean_constant": "boolean_control", "array_constant": "array_control",
+        "display": "indicator", "chart": "chart",
+    }
+    for node in graph.nodes.values():
+        if node.type not in kind_map:
+            continue
+        column, row = index % 3, index // 3
+        items.append({
+            "id": f"panel-{node.id}", "kind": kind_map[node.type], "terminal_node_id": node.id,
+            "bounds": {"x": 24 + column * 240, "y": 24 + row * 150, "width": 210, "height": 120},
+            "z_index": index, "properties": {"label": node.label}, "extensions": {},
+        })
+        index += 1
+    return {"title": title, "canvas": {"width": 960, "height": 640, "background": "#e8e8e8"},
+            "items": items, "extensions": {}}
+
+
+def _validate_panel(panel: Any, graph: Graph) -> dict[str, Any]:
+    if not isinstance(panel, dict) or set(panel) != {"title", "canvas", "items", "extensions"}:
+        raise ValueError("invalid Front Panel schema")
+    canvas = panel["canvas"]
+    if (not isinstance(panel["title"], str) or not isinstance(canvas, dict)
+            or set(canvas) != {"width", "height", "background"}
+            or any(isinstance(canvas[key], bool) or not isinstance(canvas[key], (int, float))
+                   or not math.isfinite(canvas[key]) or canvas[key] <= 0
+                   for key in ("width", "height"))
+            or not isinstance(canvas["background"], str)
+            or not isinstance(panel["items"], list) or not isinstance(panel["extensions"], dict)):
+        raise ValueError("invalid Front Panel fields")
+    seen: set[str] = set()
+    bound_terminals: set[str] = set()
+    expected_kinds = {
+        "numeric_constant": "numeric_control", "string_constant": "string_control",
+        "boolean_constant": "boolean_control", "array_constant": "array_control",
+        "display": "indicator", "chart": "chart",
+    }
+    for item in panel["items"]:
+        fields = {"id", "kind", "terminal_node_id", "bounds", "z_index", "properties", "extensions"}
+        if (not isinstance(item, dict) or set(item) != fields or not isinstance(item["id"], str)
+                or not item["id"] or item["id"] in seen or not isinstance(item["kind"], str)
+                or item["terminal_node_id"] not in graph.nodes
+                or item["terminal_node_id"] in bound_terminals
+                or isinstance(item["z_index"], bool) or not isinstance(item["z_index"], int)
+                or not isinstance(item["properties"], dict) or not isinstance(item["extensions"], dict)):
+            raise ValueError("invalid Front Panel item")
+        node = graph.nodes[item["terminal_node_id"]]
+        if expected_kinds.get(node.type) != item["kind"]:
+            raise ValueError("Front Panel item kind does not match its terminal")
+        seen.add(item["id"])
+        bound_terminals.add(item["terminal_node_id"])
+        bounds = item["bounds"]
+        if not isinstance(bounds, dict) or set(bounds) != {"x", "y", "width", "height"}:
+            raise ValueError("invalid Front Panel item bounds")
+        if any(isinstance(bounds[key], bool) or not isinstance(bounds[key], (int, float)) or not math.isfinite(bounds[key])
+               for key in bounds):
+            raise ValueError("invalid Front Panel item bounds")
+        if bounds["width"] < 40 or bounds["height"] < 30:
+            raise ValueError("Front Panel item is too small")
+    return copy.deepcopy(panel)
+
+
+def _vi_graphs(vi: VirtualInstrument) -> tuple[Graph, ...]:
+    return (vi.graph, *vi.subdiagrams.values())
+
+
+def clone_structure_properties(project: Project, vi_id: str, node_type: str,
+                               properties: dict[str, Any]) -> dict[str, Any]:
+    vi = project.vis[vi_id]
+    cloned_ids: dict[str, str] = {}
+
+    def clone_diagram(diagram_id: str) -> str:
+        if diagram_id in cloned_ids:
+            return cloned_ids[diagram_id]
+        source = vi.subdiagrams.get(diagram_id)
+        if source is None:
+            raise ValueError(f"structure subdiagram does not exist: {diagram_id}")
+        new_id = f"{diagram_id}-copy-{uuid.uuid4().hex[:8]}"
+        cloned_ids[diagram_id] = new_id
+        graph = Graph.from_dict(copy.deepcopy(source.graph_dict()))
+        id_map = {old_id: uuid.uuid4().hex[:10] for old_id in graph.nodes}
+        for old_id, child in list(graph.nodes.items()):
+            child.id = id_map[old_id]
+        graph.nodes = {child.id: child for child in graph.nodes.values()}
+        for wire in graph.wires:
+            wire.source_node = id_map[wire.source_node]
+            wire.target_node = id_map[wire.target_node]
+        graph.project = project
+        vi.subdiagrams[new_id] = graph
+        for child in graph.nodes.values():
+            if child.type in ("visual_case", "visual_for"):
+                child.properties = clone_properties(child.type, child.properties)
+        return new_id
+
+    def clone_properties(kind: str, raw: dict[str, Any]) -> dict[str, Any]:
+        result = copy.deepcopy(raw)
+        keys = ("true_diagram", "false_diagram") if kind == "visual_case" else ("body_diagram",)
+        for key in keys:
+            result[key] = clone_diagram(str(raw.get(key, "")))
+        return result
+
+    return clone_properties(node_type, properties)
+
+
+def delete_owned_structure_diagrams(project: Project, vi_id: str, node: Node) -> None:
+    if node.type not in ("visual_case", "visual_for"):
+        return
+    vi = project.vis[vi_id]
+    keys = ("true_diagram", "false_diagram") if node.type == "visual_case" else ("body_diagram",)
+
+    def referenced(diagram_id: str, ignored: Node | None = None) -> bool:
+        for graph in _vi_graphs(vi):
+            for candidate in graph.nodes.values():
+                if candidate is ignored:
+                    continue
+                candidate_keys = (("true_diagram", "false_diagram") if candidate.type == "visual_case" else
+                                  ("body_diagram",) if candidate.type == "visual_for" else ())
+                if any(candidate.properties.get(key) == diagram_id for key in candidate_keys):
+                    return True
+        return False
+
+    def remove_owned(diagram_id: str, ignored: Node | None = None) -> None:
+        if referenced(diagram_id, ignored):
+            return
+        graph = vi.subdiagrams.pop(diagram_id, None)
+        if graph is None:
+            return
+        for child in graph.nodes.values():
+            child_keys = (("true_diagram", "false_diagram") if child.type == "visual_case" else
+                          ("body_diagram",) if child.type == "visual_for" else ())
+            for key in child_keys:
+                remove_owned(str(child.properties.get(key, "")))
+
+    for key in keys:
+        remove_owned(str(node.properties.get(key, "")), node)
+
+
+def update_chart_history(history: list[float], value: Any, limit: int) -> list[float]:
+    limit = max(2, limit)
+    samples = value.y if hasattr(value, "y") else value if isinstance(value, (list, tuple)) else [value]
+    try:
+        updated = [*history, *(float(sample) for sample in samples)]
+    except (TypeError, ValueError):
+        return list(history)
+    return updated[-limit:]
 
 
 def project_snapshot(project: Project, current_vi_id: str) -> dict[str, Any]:
