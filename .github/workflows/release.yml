@@ -1,0 +1,69 @@
+name: Build Windows Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install build tools
+        run: python -m pip install --upgrade pip pyinstaller
+
+      - name: Run tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Build Windows executable
+        run: python -m PyInstaller --noconfirm --clean PyLabViewStudio.spec
+
+      - name: Verify executable
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "dist/PyLabViewStudio.exe")) {
+            throw "PyLabViewStudio.exe was not produced"
+          }
+          Get-Item "dist/PyLabViewStudio.exe" | Format-List Name,Length,LastWriteTime
+
+      - name: Create checksum
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash "dist/PyLabViewStudio.exe" -Algorithm SHA256).Hash.ToLower()
+          "$hash  PyLabViewStudio.exe" | Set-Content -Encoding ascii "dist/PyLabViewStudio.exe.sha256"
+
+      - name: Publish GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          gh release create "${{ github.ref_name }}" `
+            "dist/PyLabViewStudio.exe" `
+            "dist/PyLabViewStudio.exe.sha256" `
+            --repo "${{ github.repository }}" `
+            --title "PyLabView Studio ${{ github.ref_name }}" `
+            --generate-notes
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PyLabViewStudio-Windows-${{ github.ref_name }}
+          path: |
+            dist/PyLabViewStudio.exe
+            dist/PyLabViewStudio.exe.sha256
+          if-no-files-found: error

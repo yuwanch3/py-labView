@@ -1,5 +1,7 @@
 # PyLabView Studio
 
+Versi stabil saat ini: **1.0.0**.
+
 PyLabView Studio adalah lingkungan desktop dataflow visual independen yang dibuat dengan Python dan `tkinter`. Aplikasi ini ditujukan untuk pembelajaran, eksperimen, dan prototipe instrumentasi simulasi.
 
 Proyek ini **bukan NI LabVIEW**, bukan produk National Instruments, serta tidak berafiliasi atau didukung oleh National Instruments. Tidak ada logo maupun aset merek NI di proyek ini. LabVIEW adalah merek dagang pemiliknya masing-masing.
@@ -72,6 +74,12 @@ build_windows.bat
 ```
 
 Script memasang PyInstaller bila diperlukan dan menjalankan `PyLabViewStudio.spec`. Hasil berada di `dist\PyLabViewStudio.exe`. Repository ini dibuat di Linux, sehingga executable Windows tidak dihasilkan atau diklaim telah diuji di lingkungan ini.
+
+## Rilis Siap Pakai
+
+Setiap tag versi `v*` menjalankan GitHub Actions pada Windows untuk menguji proyek, membangun `PyLabViewStudio.exe`, membuat checksum SHA-256, dan menerbitkan GitHub Release. Halaman release juga menyediakan arsip source code ZIP dan TAR.GZ secara otomatis.
+
+Unduh versi terbaru dari [GitHub Releases](https://github.com/ha-neko/py-labView/releases/latest).
 
 ## Struktur
 
