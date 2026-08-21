@@ -33,4 +33,4 @@ Built-in definitions must have an explicit registered handler. A type absent fro
 
 ## Persistence
 
-Application release 4.3.0 deliberately keeps project schema version 3. New behavior is represented by node type/properties and root/panel extension points, so no v3-to-v4 data migration is necessary.
+Application release 4.3.1 deliberately keeps project schema version 3. New behavior is represented by node type/properties and root/panel extension points, so no v3-to-v4 data migration is necessary.

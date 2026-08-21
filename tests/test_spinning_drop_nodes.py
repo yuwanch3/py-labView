@@ -151,12 +151,14 @@ class SpinningDropNodeTests(unittest.TestCase):
         self.assertFalse(result["error"].status)
 
     def test_ack_and_stage_events(self):
-        stream = TelemetryStream([b"ACK:START\n", b"TARGET_RPM:1000\n"])
+        # TARGET_RPM:2000: the first stage event a real firmware ever sends
+        # (the initial 1000 target is implicit at START, never announced).
+        stream = TelemetryStream([b"ACK:START\n", b"TARGET_RPM:2000\n"])
         session = RunSession(resources=ResourceManager())
         runtime = DataflowRuntime(serial=SerialAdapter(ArduinoBackend(stream)))
         first = self.reader_pass(runtime, session)
         self.assertTrue(first["stage_changed"])
-        self.assertEqual(first["current_target_rpm"], 1000.0)
+        self.assertEqual(first["current_target_rpm"], 2000.0)
         second = self.reader_pass(runtime, session, run=True)  # no new lines
         self.assertFalse(second["stage_changed"], "stage_changed must be true for exactly one tick")
         third = self.reader_pass(runtime, session)
@@ -260,9 +262,12 @@ class SpinningDropNodeTests(unittest.TestCase):
 
     def test_watcher_full_cycle_yields_exactly_six_rows(self):
         session = RunSession(resources=ResourceManager())
-        first = self.watch_pass(session, stage_changed=True, current_target_rpm=1000.0)
+        # Real firmware: START is answered with ACK:START and an implicit
+        # hardcoded ramp to 1000 RPM — no TARGET_RPM:1000 event ever exists.
+        first = self.watch_pass(session)
         self.assertEqual(first["state"], "RUNNING")
-        self.assertEqual(len(first["table_data"]), 1, "first TARGET_RPM starts stage 1000, no row yet")
+        self.assertEqual(len(first["table_data"]), 1, "START announces nothing; header only")
+        # First serial stage event of a real cycle is the increment to 2000.
         for index, target in enumerate((2000, 3000, 4000, 5000, 6000), start=1):
             result = self.watch_pass(session, stage_changed=True, current_target_rpm=float(target),
                                      rpm=float(target), elapsed_time_s=180.0 * index)
@@ -278,9 +283,25 @@ class SpinningDropNodeTests(unittest.TestCase):
         self.assertEqual(final["table_data"][0],
                          ["RPM", "Dia (px)", "Dia (mm)", "kg/m3", "w²", "r³", "IFT N/m", "IFT mN/m"])
 
+    def test_watcher_does_not_lose_first_stage_row_matching_real_firmware(self):
+        """Regression: firmware never sends TARGET_RPM:1000. The exact real
+        event order is run=True -> TARGET_RPM:2000 .. TARGET_RPM:6000 ->
+        ACK:AUTOSTOP_6000, and the final table must still hold all six rows
+        starting with the implicit 1000 RPM stage."""
+        session = RunSession(resources=ResourceManager())
+        self.watch_pass(session)  # run=True alone: firmware announces nothing
+        for target in (2000, 3000, 4000, 5000, 6000):
+            self.watch_pass(session, stage_changed=True, current_target_rpm=float(target))
+        final = self.watch_pass(session, autostop=True)
+        rows = final["table_data"][1:]
+        self.assertEqual(len(rows), 6,
+                         "silent loss of the implicit 1000 RPM row is forbidden")
+        self.assertEqual([row[0] for row in rows],
+                         [1000.0, 2000.0, 3000.0, 4000.0, 5000.0, 6000.0])
+
     def test_watcher_never_appends_without_firmware_events(self):
         session = RunSession(resources=ResourceManager())
-        self.watch_pass(session, stage_changed=True, current_target_rpm=1000.0)
+        self.watch_pass(session)  # RUNNING entry, no events announced
         for _ in range(25):
             result = self.watch_pass(session)  # telemetry flowing, no events
         self.assertEqual(len(result["table_data"]), 1,
@@ -288,8 +309,9 @@ class SpinningDropNodeTests(unittest.TestCase):
 
     def test_watcher_resets_on_stop(self):
         session = RunSession(resources=ResourceManager())
-        self.watch_pass(session, stage_changed=True, current_target_rpm=1000.0)
-        self.watch_pass(session, autostop=True)
+        self.watch_pass(session)
+        stopped = self.watch_pass(session, autostop=True)
+        self.assertEqual(len(stopped["table_data"]) - 1, 1, "implicit 1000 stage completed by autostop")
         reset = self.watch_pass(session, run=False)
         self.assertEqual(reset["state"], "IDLE")
         self.assertEqual(reset["table_data"],
@@ -406,7 +428,9 @@ class SpinningDropNodeTests(unittest.TestCase):
     def test_example_single_pass_with_fake_telemetry(self):
         path = Path(__file__).parents[1] / "examples" / "spinning_drop_ift.json"
         project = load_project(path)
-        stream = TelemetryStream([b"ACK:START\n", b"TARGET_RPM:1000\n",
+        # Real firmware traffic after START: ACK, then telemetry only. The
+        # initial 1000 RPM target is implicit — no TARGET_RPM:1000 line exists.
+        stream = TelemetryStream([b"ACK:START\n",
                                   b"RPM:1000;PWM:42;TIME:0.500;TARGET:1000\n"])
         with TemporaryDirectory() as directory:
             runtime = DataflowRuntime(serial=SerialAdapter(ArduinoBackend(stream)),
