@@ -9,9 +9,11 @@ from .api import HandlerContext
 from .registry import BUILTIN_HANDLERS as registry
 
 
-_ACK_PWM = re.compile(r"ACK_PWM:(\d{1,3})")
-_RPM_OK = re.compile(r"RPM:([0-9]+(?:\.[0-9]+)?):SENSOR_OK")
-_RPM_NO_SENSOR = re.compile(r"RPM:0:NO_SENSOR:PWM=(\d{1,3})")
+# Ground truth: lab Arduino firmware source (found on the lab PC, 2026-08-21).
+# The firmware runs the 6-stage RPM sequence itself (1000..6000, 3 min per
+# stage, autostop after 3 min at 6000). The PC is a passive listener.
+_TELEMETRY = re.compile(r"RPM:(\d+);PWM:(\d+);TIME:(\d+(?:\.\d+)?);TARGET:(\d+)")
+_TARGET_EVENT = re.compile(r"TARGET_RPM:(\d+)")
 
 
 def _finite_positive(value: object, name: str) -> float:
@@ -27,58 +29,85 @@ def _ift_error(message: str, code: int = 64) -> dict[str, object]:
             "ift_mN_m": 0.0, "error": ErrorCluster(True, code, message)}
 
 
-@registry.register("arduino_motor_rpm")
-def arduino_motor_rpm(context: HandlerContext):
+@registry.register("arduino_telemetry_reader")
+def arduino_telemetry_reader(context: HandlerContext):
+    """Passive serial listener for the spinning-drop firmware.
+
+    Sends START once on the rising edge of `run` and STOP once on the falling
+    edge; everything else is draining an unsolicited stream. Tolerant of
+    garbage and partial lines: unrecognized lines are dropped, partial chunks
+    stay buffered inside SerialConnection until their newline arrives.
+    """
     connection = None
+    state_key = f"telemetry:{context.caller_vi or 'graph'}:{context.graph_scope}:{context.node.id}"
+    state = context.session.state.setdefault(state_key, {
+        "running": False, "start_pending": False,
+        "rpm": 0.0, "pwm": 0.0, "elapsed": 0.0, "target": 0.0})
     try:
-        pwm_number = float(context.inputs["pwm"])
-        pwm = int(pwm_number)
-        if not math.isfinite(pwm_number) or pwm_number != pwm or not 0 <= pwm <= 255:
-            raise ValueError("PWM must be an integer between 0 and 255")
-        maximum = int(context.node.properties.get("response_bytes", 256))
-        if maximum < 32 or maximum > 4096:
-            raise ValueError("Arduino response_bytes must be between 32 and 4096")
+        run = bool(context.inputs["run"])
+        maximum = int(context.node.properties.get("response_bytes", 4096))
+        if maximum < 32 or maximum > 65536:
+            raise ValueError("Arduino response_bytes must be between 32 and 65536")
+        max_lines = int(context.node.properties.get("max_lines", 32))
+        if max_lines < 1 or max_lines > 256:
+            raise ValueError("Arduino max_lines must be between 1 and 256")
         connection_ref = context.runtime._session_resource(
             context.session, context.caller_vi, context.node, "serial", context.graph_scope,
             lambda: context.session.resources.add("serial", context.runtime.serial.open(
                 str(context.inputs["port"]), int(context.node.properties.get("baudrate", 115200)),
-                float(context.node.properties.get("timeout", 1)), close_command=b"SET_PWM:0\n")))
+                float(context.node.properties.get("timeout", 0.2)), close_command=b"STOP\n")))
         connection = context.session.resources.get(connection_ref, "serial")
         cancel_key = f"arduino-safe-stop:{context.caller_vi or 'graph'}:{context.graph_scope}:{context.node.id}"
         if not context.session.state.get(cancel_key):
             context.session.token.add_cancel_callback(connection.safe_stop)
             context.session.state[cancel_key] = True
         context.session.token.check()
-        replies = connection.query_lines(f"SET_PWM:{pwm}\n".encode("ascii"), 2, maximum)
+
+        if run and not state["running"] and not state["start_pending"]:
+            if int(connection.write(b"START\n")) != len(b"START\n"):
+                raise OSError("incomplete serial command write")
+            state["start_pending"] = True
+        if not run and (state["running"] or state["start_pending"]):
+            if int(connection.write(b"STOP\n")) != len(b"STOP\n"):
+                raise OSError("incomplete serial command write")
+            state["running"] = False
+            state["start_pending"] = False
         context.session.token.check()
-        ack_text, rpm_text = (reply.decode("ascii").strip() for reply in replies)
-        ack = _ACK_PWM.fullmatch(ack_text)
-        if not ack:
-            raise ValueError("invalid Arduino ACK_PWM response")
-        pwm_actual = int(ack.group(1))
-        if not 0 <= pwm_actual <= 255:
-            raise ValueError("Arduino ACK_PWM value is outside 0..255")
-        if pwm_actual != pwm:
-            raise ValueError("Arduino ACK_PWM does not match requested PWM")
-        match = _RPM_OK.fullmatch(rpm_text)
-        if match:
-            rpm = float(match.group(1))
-            if not math.isfinite(rpm) or rpm < 0:
-                raise ValueError("Arduino RPM value is invalid")
-            return {"rpm": rpm, "pwm_actual": pwm_actual, "sensor_status": "OK", "error": ErrorCluster()}
-        match = _RPM_NO_SENSOR.fullmatch(rpm_text)
-        if match:
-            reported_pwm = int(match.group(1))
-            if reported_pwm != pwm_actual or reported_pwm != pwm:
-                raise ValueError("Arduino PWM values disagree")
-            connection.safe_stop()
-            return {"rpm": 0.0, "pwm_actual": pwm_actual, "sensor_status": "NO_SENSOR",
-                    "error": ErrorCluster(True, 61, "RPM sensor did not provide verified feedback")}
-        if rpm_text == "RPM:0:STOPPED":
-            if pwm != 0:
-                raise ValueError("Arduino reported STOPPED for a non-zero PWM request")
-            return {"rpm": 0.0, "pwm_actual": pwm_actual, "sensor_status": "STOPPED", "error": ErrorCluster()}
-        raise ValueError("invalid Arduino RPM response")
+
+        stage_changed = False
+        autostop = False
+        for raw in connection.read_incoming(max_lines, maximum):
+            text = raw.decode("ascii", errors="replace").strip()
+            if not text:
+                continue
+            match = _TELEMETRY.fullmatch(text)
+            if match:
+                state["rpm"] = float(match.group(1))
+                state["pwm"] = float(match.group(2))
+                state["elapsed"] = float(match.group(3))
+                state["target"] = float(match.group(4))
+                continue
+            match = _TARGET_EVENT.fullmatch(text)
+            if match:
+                state["target"] = float(match.group(1))
+                stage_changed = True
+                continue
+            if text == "ACK:START":
+                state["start_pending"] = False
+                state["running"] = True
+                continue
+            if text == "ACK:STOP":
+                continue
+            if text == "ACK:AUTOSTOP_6000":
+                autostop = True
+                continue
+            # Garbage or unknown line: tolerated and ignored by design.
+        context.session.token.check()
+        return {"rpm": float(state["rpm"]), "pwm": float(state["pwm"]),
+                "elapsed_time_s": float(state["elapsed"]),
+                "current_target_rpm": float(state["target"]),
+                "stage_changed": stage_changed, "autostop": autostop,
+                "error": ErrorCluster()}
     except CancelledError:
         if connection is not None:
             try:
@@ -92,8 +121,94 @@ def arduino_motor_rpm(context: HandlerContext):
                 connection.safe_stop()
             except Exception:
                 pass
-        return {"rpm": 0.0, "pwm_actual": 0, "sensor_status": "NO_SENSOR",
+        return {"rpm": 0.0, "pwm": 0.0, "elapsed_time_s": 0.0, "current_target_rpm": 0.0,
+                "stage_changed": False, "autostop": False,
                 "error": ErrorCluster(True, 60, str(exc))}
+
+
+@registry.register("rpm_stall_watchdog")
+def rpm_stall_watchdog(context: HandlerContext):
+    """PC-side safety net. The firmware reports no sensor status, so a dead
+    sensor or motor is inferred locally: rpm staying at 0 while the target
+    demands rotation. This is explicitly a PC-side inference, NOT data from
+    the Arduino."""
+    state_key = f"rpm-stall:{context.caller_vi or 'graph'}:{context.graph_scope}:{context.node.id}"
+    state = context.session.state.setdefault(state_key, {"zero_since": None, "stalled": False})
+    run = bool(context.inputs["run"])
+    target = float(context.inputs["current_target_rpm"])
+    rpm = float(context.inputs["rpm"])
+    seconds = float(context.node.properties.get("stall_seconds", 10.0))
+    if not math.isfinite(seconds) or not 1.0 <= seconds <= 600.0:
+        from ..runtime import DataflowError
+        raise DataflowError("stall_seconds must be between 1 and 600")
+    if not run or target <= 0 or not math.isfinite(rpm) or not math.isfinite(target):
+        state.update({"zero_since": None, "stalled": False})
+        return False
+    if rpm <= 0.0:
+        now = context.runtime.clock()
+        if state["zero_since"] is None:
+            state["zero_since"] = now
+        elif now - state["zero_since"] >= seconds:
+            state["stalled"] = True
+    else:
+        state.update({"zero_since": None, "stalled": False})
+    return bool(state["stalled"])
+
+
+@registry.register("spinning_drop_stage_watcher")
+def spinning_drop_stage_watcher(context: HandlerContext):
+    """Event-driven table builder. All timing belongs to the Arduino firmware;
+    this node NEVER measures stage duration itself. A row is appended exactly
+    when the firmware reports the next TARGET_RPM (meaning the previous stage
+    finished its hold) or when it announces ACK:AUTOSTOP_6000 (final 6000 RPM
+    row). Full cycle yields exactly 6 rows: 5 from TARGET_RPM events plus the
+    final one from the autostop acknowledgement."""
+    headers = ["RPM", "Dia (px)", "Dia (mm)", "kg/m3", "w²", "r³", "IFT N/m", "IFT mN/m"]
+    measured = ("diameter_px", "diameter_mm", "delta_rho", "omega_squared",
+                "radius_cubed", "ift_N_m", "ift_mN_m")
+    state_key = f"stage-watcher:{context.caller_vi or 'graph'}:{context.graph_scope}:{context.node.id}"
+    state = context.session.state.setdefault(state_key, {"s": "IDLE", "rows": [], "last_target": None})
+
+    def result(state_label: str | None = None, error: ErrorCluster | None = None) -> dict[str, object]:
+        return {"table_data": [headers, *state["rows"]],
+                "state": state_label or state["s"],
+                "error": error if error is not None else ErrorCluster()}
+
+    run = bool(context.inputs["run"])
+    if not run:
+        state.update({"s": "IDLE", "rows": [], "last_target": None})
+        return result()
+
+    if context.inputs["error"].status:
+        state["s"] = "ERROR"
+        return result("ERROR", ErrorCluster(True, 66, f"serial fault: watcher halted ({context.inputs['error'].source})"))
+    if bool(context.inputs["stalled"]):
+        state["s"] = "ERROR"
+        return result("ERROR", ErrorCluster(True, 67, "RPM stall detected: watcher halted"))
+
+    if state["s"] == "IDLE":
+        state["s"] = "RUNNING"
+
+    if state["s"] == "RUNNING":
+        def snapshot(completed_rpm: float) -> list[float]:
+            row = [float(completed_rpm)] + [float(context.inputs[port]) for port in measured]
+            return row if all(math.isfinite(value) for value in row) else []
+
+        if bool(context.inputs["stage_changed"]):
+            new_target = float(context.inputs["current_target_rpm"])
+            if state["last_target"] is not None:
+                row = snapshot(float(state["last_target"]))
+                if row:
+                    state["rows"].append(row)
+            state["last_target"] = new_target
+        if bool(context.inputs["autostop"]):
+            if state["last_target"] is not None:
+                row = snapshot(float(state["last_target"]))
+                if row:
+                    state["rows"].append(row)
+            state["s"] = "AWAITING_STOP"
+
+    return result()
 
 
 @registry.register("camera_capture_dual_mode")
@@ -132,9 +247,6 @@ def pixel_to_mm(context: HandlerContext):
 
 @registry.register("vonnegut_ift")
 def vonnegut_ift(context: HandlerContext):
-    status = str(context.inputs["sensor_status"])
-    if status != "OK":
-        return _ift_error(f"verified RPM sensor status required; received {status}", 63)
     from ..runtime import DataflowError
     try:
         rpm = _finite_positive(context.inputs["rpm"], "rpm")
@@ -171,76 +283,3 @@ def delta_density(context: HandlerContext):
         from ..runtime import DataflowError
         raise DataflowError("densities must be finite and greater than zero")
     return abs(first - second)
-
-
-@registry.register("spinning_drop_log_row")
-def spinning_drop_log_row(context: HandlerContext):
-    for name in ("motor_error", "ift_error"):
-        error = context.inputs[name]
-        if error.status:
-            from ..runtime import DataflowError
-            raise DataflowError(f"measurement rejected: {error.source}")
-    ports = ("rpm", "diameter_px", "diameter_mm", "delta_rho", "omega_squared",
-             "radius_cubed", "ift_N_m", "ift_mN_m")
-    values = [float(context.inputs[port]) for port in ports]
-    if not all(math.isfinite(value) for value in values):
-        from ..runtime import DataflowError
-        raise DataflowError("spinning-drop log values must be finite")
-    headers = ["RPM", "Dia(px)", "Dia(mm)", "kg/m3", "w²", "r³", "IFT N/m", "IFT mN/m"]
-    maximum = context.runtime._bounded_int(context.node, "max_rows", 1000)
-    if maximum < 1 or maximum > 100_000:
-        from ..runtime import DataflowError
-        raise DataflowError("spinning-drop log max_rows is outside 1..100000")
-    key = f"spinning-drop-log:{context.caller_vi or 'graph'}:{context.graph_scope}:{context.node.id}"
-    rows = context.session.state.setdefault(key, [])
-    rows.append(values)
-    del rows[:-maximum]
-    return [headers, *rows]
-
-
-@registry.register("spinning_drop_sequencer")
-def spinning_drop_sequencer(context: HandlerContext):
-    state_key = f"sd-seq:{context.node.id}"
-    state = context.session.state.setdefault(state_key, {
-        "s": "IDLE", "idx": 0, "start": 0.0, "rows": [], "pwm": 0.0
-    })
-    
-    start = context.inputs["start"]
-    rpm_list = context.node.properties.get("rpm_list", [1000, 2000, 3000, 4000, 5000, 6000])
-    dur = float(context.node.properties.get("stage_duration", 180.0))
-    
-    if not start and state["s"] != "IDLE":
-        state.update({"s": "IDLE", "idx": 0, "rows": []})
-        return {"target_pwm": 0.0, "trigger_capture": False, "state": "IDLE", "countdown": 0.0, "table_data": [], "error": ErrorCluster()}
-    
-    if start and state["s"] == "IDLE":
-        state.update({"s": "RUNNING", "idx": 0, "start": context.runtime.clock(), "rows": []})
-    
-    if state["s"] == "RUNNING":
-        if context.inputs["sensor_status"] != "OK" or context.inputs["motor_error"].status or context.inputs["capture_error"].status:
-            state["s"] = "ERROR"
-            return {"target_pwm": 0.0, "trigger_capture": False, "state": "ERROR", "countdown": 0.0, "table_data": [], 
-                    "error": ErrorCluster(True, 62, "Hardware error: sequencer halted")}
-
-        now = context.runtime.clock()
-        elapsed = now - state["start"]
-        target_rpm = rpm_list[state["idx"]]
-        target_pwm = target_rpm * 255.0 / 6000.0
-        
-        if elapsed >= dur:
-            ports = ("rpm_measured", "diameter_px", "diameter_mm", "delta_rho", "omega_squared", "radius_cubed", "ift_N_m", "ift_mN_m")
-            state["rows"].append([float(context.inputs[p]) for p in ports])
-            
-            if state["idx"] < len(rpm_list) - 1:
-                state.update({"idx": state["idx"] + 1, "start": now})
-                return {"target_pwm": target_pwm, "trigger_capture": True, "state": f"STAGE_{state['idx']}", "countdown": dur, "table_data": state["rows"], "error": ErrorCluster()}
-            else:
-                state["s"] = "AWAITING_STOP"
-                return {"target_pwm": 0.0, "trigger_capture": True, "state": "AWAITING_STOP", "countdown": 0.0, "table_data": state["rows"], "error": ErrorCluster()}
-        
-        return {"target_pwm": target_pwm, "trigger_capture": False, "state": f"STAGE_{state['idx']}", "countdown": max(0.0, dur - elapsed), "table_data": state["rows"], "error": ErrorCluster()}
-
-    if state["s"] == "AWAITING_STOP":
-        return {"target_pwm": 0.0, "trigger_capture": False, "state": "AWAITING_STOP", "countdown": 0.0, "table_data": state["rows"], "error": ErrorCluster()}
-        
-    return {"target_pwm": 0.0, "trigger_capture": False, "state": state["s"], "countdown": 0.0, "table_data": state["rows"], "error": ErrorCluster()}
