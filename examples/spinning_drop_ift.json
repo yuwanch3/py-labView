@@ -11,6 +11,7 @@
         "name": "Spinning Drop IFT Tensiometer",
         "nodes": [
           {"id":"motor","type":"boolean_constant","x":20,"y":20,"label":"Motor STOP / START","properties":{"value":false,"display_type":"boolean"}},
+          {"id":"sequencer","type":"spinning_drop_sequencer","x":430,"y":300,"label":"Spinning Drop Sequencer","properties":{}},
           {"id":"com","type":"string_constant","x":20,"y":100,"label":"COM Arduino","properties":{"value":"COM3","display_type":"string"}},
           {"id":"oil_mode","type":"string_constant","x":20,"y":180,"label":"Camera Mode","properties":{"value":"usb","display_type":"string"}},
           {"id":"oil_source","type":"numeric_constant","x":20,"y":260,"label":"USB Device Index","properties":{"value":0,"display_type":"numeric"}},
@@ -65,11 +66,22 @@
           {"id":"table_display","type":"display","x":1490,"y":500,"label":"Measurement Log Table","properties":{"display_type":"table","style":"default"}}
         ],
         "wires": [
-          {"source_node":"motor","source_port":"out","target_node":"pwm_select","target_port":"condition","data_type":"boolean"},
-          {"source_node":"pwm_start","source_port":"out","target_node":"pwm_select","target_port":"true","data_type":"numeric"},
-          {"source_node":"pwm_zero","source_port":"out","target_node":"pwm_select","target_port":"false","data_type":"numeric"},
-          {"source_node":"com","source_port":"out","target_node":"arduino","target_port":"port","data_type":"string"},
-          {"source_node":"pwm_select","source_port":"out","target_node":"arduino","target_port":"pwm","data_type":"variant"},
+          {"source_node":"motor","source_port":"out","target_node":"sequencer","target_port":"start","data_type":"boolean"},
+          {"source_node":"arduino","source_port":"rpm","target_node":"sequencer","target_port":"rpm_measured","data_type":"numeric"},
+          {"source_node":"arduino","source_port":"sensor_status","target_node":"sequencer","target_port":"sensor_status","data_type":"string"},
+          {"source_node":"arduino","source_port":"error","target_node":"sequencer","target_port":"motor_error","data_type":"error"},
+          {"source_node":"oil_camera","source_port":"image","target_node":"sequencer","target_port":"capture_error","data_type":"error"},
+          {"source_node":"ift","source_port":"ift_mN_m","target_node":"sequencer","target_port":"ift_mN_m","data_type":"numeric"},
+          {"source_node":"oil_edge","source_port":"diameter_px","target_node":"sequencer","target_port":"diameter_px","data_type":"numeric"},
+          {"source_node":"drop_mm","source_port":"diameter_mm","target_node":"sequencer","target_port":"diameter_mm","data_type":"numeric"},
+          {"source_node":"density_delta","source_port":"delta_rho","target_node":"sequencer","target_port":"delta_rho","data_type":"numeric"},
+          {"source_node":"ift","source_port":"omega_squared","target_node":"sequencer","target_port":"omega_squared","data_type":"numeric"},
+          {"source_node":"ift","source_port":"radius_cubed","target_node":"sequencer","target_port":"radius_cubed","data_type":"numeric"},
+          {"source_node":"ift","source_port":"ift_N_m","target_node":"sequencer","target_port":"ift_N_m","data_type":"numeric"},
+
+          {"source_node":"sequencer","source_port":"target_pwm","target_node":"arduino","target_port":"pwm","data_type":"numeric"},
+          {"source_node":"sequencer","source_port":"trigger_capture","target_node":"oil_camera","target_port":"trigger","data_type":"boolean"},
+          {"source_node":"sequencer","source_port":"trigger_capture","target_node":"wire_camera","target_port":"trigger","data_type":"boolean"},
 
           {"source_node":"oil_mode","source_port":"out","target_node":"oil_camera","target_port":"mode","data_type":"string"},
           {"source_node":"oil_source","source_port":"out","target_node":"oil_camera","target_port":"device_index","data_type":"numeric"},
@@ -129,7 +141,11 @@
           {"source_node":"ift","source_port":"radius_cubed","target_node":"radius_display","target_port":"value","data_type":"numeric"},
           {"source_node":"ift","source_port":"ift_N_m","target_node":"ift_n_display","target_port":"value","data_type":"numeric"},
           {"source_node":"ift","source_port":"ift_mN_m","target_node":"ift_mn_display","target_port":"value","data_type":"numeric"},
-          {"source_node":"log_row","source_port":"table_data","target_node":"table_display","target_port":"value","data_type":"array"}
+          {"id":"state_display","type":"display","x":1490,"y":20,"label":"Sequencer State","properties":{"display_type":"numeric","style":"default"}},
+          {"id":"count_display","type":"display","x":1490,"y":100,"label":"Stage Countdown (s)","properties":{"display_type":"numeric","style":"default"}},
+          {"source_node":"sequencer","source_port":"state","target_node":"state_display","target_port":"value","data_type":"string"},
+          {"source_node":"sequencer","source_port":"countdown","target_node":"count_display","target_port":"value","data_type":"numeric"},
+          {"source_node":"sequencer","source_port":"table_data","target_node":"table_display","target_port":"value","data_type":"array"},
         ]
       },
       "connector_pane": {"inputs": [], "outputs": []},

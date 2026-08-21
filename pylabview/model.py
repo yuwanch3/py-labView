@@ -181,6 +181,15 @@ NODE_DEFINITIONS: dict[str, NodeDefinition] = {
                                  input_types=(NUMERIC, NUMERIC, NUMERIC, NUMERIC, NUMERIC, NUMERIC, NUMERIC, NUMERIC,
                                               ERROR, ERROR),
                                  output_types=(ARRAY,)),
+    "spinning_drop_sequencer": _d("Spinning Drop Sequencer", "Spinning Drop IFT",
+                                   ("start", "rpm_measured", "sensor_status", "motor_error", "capture_error",
+                                    "ift_mN_m", "diameter_px", "diameter_mm", "delta_rho", "omega_squared",
+                                    "radius_cubed", "ift_N_m"),
+                                   ("target_pwm", "trigger_capture", "state", "countdown", "table_data", "error"),
+                                   {"rpm_list": [1000, 2000, 3000, 4000, 5000, 6000], "stage_duration": 180.0},
+                                   input_types=(BOOLEAN, NUMERIC, STRING, ERROR, ERROR,
+                                                NUMERIC, NUMERIC, NUMERIC, NUMERIC, NUMERIC, NUMERIC, NUMERIC),
+                                   output_types=(NUMERIC, BOOLEAN, STRING, NUMERIC, ARRAY, ERROR)),
 }
 
 
