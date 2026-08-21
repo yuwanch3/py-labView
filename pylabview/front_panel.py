@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import math
 import tkinter as tk
 from tkinter import simpledialog
 from typing import Any, Callable
 
 from .model import Graph, _normalized_panel, update_chart_history
 from .integrations.vision_adapter import ImageFrame
+from .panel_widgets import gauge_fraction, image_to_ppm, next_dropdown_value, table_rows
 
 
 class PanelDesigner(tk.Canvas):
@@ -27,6 +29,7 @@ class PanelDesigner(tk.Canvas):
         self.selected_id: str | None = None
         self.values: dict[str, Any] = {}
         self.chart_history: dict[str, list[float]] = {}
+        self._image_refs: dict[str, tk.PhotoImage] = {}
         self._drag: tuple[str, float, float, dict[str, float], bool] | None = None
         self.bind("<Button-1>", self._press)
         self.bind("<Double-1>", self._double_press)
@@ -81,6 +84,7 @@ class PanelDesigner(tk.Canvas):
 
     def redraw(self) -> None:
         self.delete("all")
+        self._image_refs.clear()
         width, height = int(self.panel["canvas"]["width"]), int(self.panel["canvas"]["height"])
         if self.mode == "edit":
             for x in range(0, width + 1, self.grid_size):
@@ -102,10 +106,55 @@ class PanelDesigner(tk.Canvas):
         node_id = item["terminal_node_id"]
         value = self.values.get(node_id, "--")
         kind = item["kind"]
+        display_type = item["properties"].get("display_type", "")
         if kind == "image_indicator" and isinstance(value, ImageFrame):
-            self.create_text(x + w / 2, y + h / 2 + 10,
-                             text=f"Image {value.width} x {value.height} x {value.channels}\n(in-memory frame)",
-                             justify="center", tags=("panel_item", tag))
+            try:
+                image = tk.PhotoImage(data=image_to_ppm(value), format="PPM")
+                scale = max(1, math.ceil(max(image.width() / max(w - 12, 1),
+                                             image.height() / max(h - 30, 1))))
+                if scale > 1:
+                    image = image.subsample(scale, scale)
+                self._image_refs[item["id"]] = image
+                self.create_image(x + w / 2, y + h / 2 + 10, image=image, tags=("panel_item", tag))
+            except (TypeError, ValueError, tk.TclError):
+                self.create_text(x + w / 2, y + h / 2 + 10,
+                                 text=f"Image {value.width} x {value.height} x {value.channels}",
+                                 justify="center", tags=("panel_item", tag))
+        elif kind == "boolean_control" and display_type == "radio_start_stop":
+            active = bool(value)
+            for index, (text, selected_value) in enumerate((("STOP (0)", False), ("START (1)", True))):
+                center_x = x + w * (0.28 + index * 0.44)
+                self.create_oval(center_x - 9, y + h / 2 - 3, center_x + 9, y + h / 2 + 15,
+                                 fill="#35b85a" if active == selected_value else "#fff", outline="#222",
+                                 tags=("panel_item", tag))
+                self.create_text(center_x, y + h - 10, text=text, tags=("panel_item", tag))
+        elif display_type == "gauge" and isinstance(value, (int, float)):
+            fraction = gauge_fraction(value, item["properties"].get("minimum", 0),
+                                      item["properties"].get("maximum", 100))
+            left, right, top, bottom = x + 12, x + w - 12, y + h / 2, y + h / 2 + 18
+            self.create_rectangle(left, top, right, bottom, fill="#ddd", outline="#333", tags=("panel_item", tag))
+            self.create_rectangle(left, top, left + (right - left) * fraction, bottom,
+                                  fill="#00866a", outline="", tags=("panel_item", tag))
+            self.create_text(x + w / 2, bottom + 12, text=self._format(value), tags=("panel_item", tag))
+        elif display_type == "table":
+            rows = table_rows(value)
+            if rows:
+                columns = max(len(row) for row in rows)
+                cell_w = (w - 12) / max(columns, 1)
+                cell_h = min(28, (h - 28) / max(len(rows), 1))
+                for row_index, row in enumerate(rows[:10]):
+                    for column_index, cell in enumerate(row):
+                        x0, y0 = x + 6 + column_index * cell_w, y + 24 + row_index * cell_h
+                        self.create_rectangle(x0, y0, x0 + cell_w, y0 + cell_h, outline="#aaa",
+                                              tags=("panel_item", tag))
+                        self.create_text(x0 + cell_w / 2, y0 + cell_h / 2, text=self._format(cell)[:16],
+                                         font=("TkFixedFont", 8), tags=("panel_item", tag))
+        elif display_type == "dropdown" and kind == "string_control":
+            self.create_rectangle(x + 8, y + h / 2 - 8, x + w - 8, y + h / 2 + 20,
+                                  fill="white", outline="#555", tags=("panel_item", tag))
+            self.create_text(x + 14, y + h / 2 + 6, text=self._format(value), anchor="w",
+                             tags=("panel_item", tag))
+            self.create_text(x + w - 20, y + h / 2 + 6, text="▼", tags=("panel_item", tag))
         elif kind == "boolean_control" or (kind == "indicator" and isinstance(value, bool)):
             active = bool(value)
             self.create_oval(x + w / 2 - 18, y + h / 2 - 10, x + w / 2 + 18, y + h / 2 + 26,
@@ -118,6 +167,12 @@ class PanelDesigner(tk.Canvas):
                 for index, number in enumerate(numbers):
                     points.extend((x + 8 + index * (w - 16) / (len(numbers) - 1), y + h - 8 - (number - low) / span * (h - 36)))
                 self.create_line(*points, fill="#00866a", width=2, tags=("panel_item", tag))
+            self.create_text(x + w / 2, y + h - 5,
+                             text=item["properties"].get("x_label", "Baris Pixel"), anchor="s",
+                             font=("TkDefaultFont", 7), tags=("panel_item", tag))
+            self.create_text(x + 4, y + h / 2,
+                             text=item["properties"].get("y_label", "Intensitas (Threshold)"), anchor="w",
+                             angle=90, font=("TkDefaultFont", 7), tags=("panel_item", tag))
         else:
             self.create_text(x + w / 2, y + h / 2 + 10, text=self._format(value),
                              font=("TkFixedFont", 13, "bold"), tags=("panel_item", tag))
@@ -146,7 +201,20 @@ class PanelDesigner(tk.Canvas):
         node_id = item["terminal_node_id"]
         if self.mode == "operate":
             if item["kind"] == "boolean_control":
-                self.values[node_id] = not bool(self.values.get(node_id, False)); self.redraw()
+                if item["properties"].get("display_type") == "radio_start_stop":
+                    midpoint = item["bounds"]["x"] + item["bounds"]["width"] / 2
+                    self.values[node_id] = x >= midpoint
+                else:
+                    self.values[node_id] = not bool(self.values.get(node_id, False))
+                self.redraw()
+                self.on_value_change(self.control_values())
+            elif item["kind"] == "string_control" and item["properties"].get("display_type") == "dropdown":
+                try:
+                    self.values[node_id] = next_dropdown_value(
+                        self.values.get(node_id, ""), item["properties"].get("options"))
+                except ValueError:
+                    return
+                self.redraw()
                 self.on_value_change(self.control_values())
             return
         self.selected_id = item["id"]

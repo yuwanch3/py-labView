@@ -4,11 +4,14 @@
 
 - `model.py`, `typesystem.py`, `persistence.py`: strict schema v3, graph types, and atomic project persistence.
 - `execution.py`, `resources.py`, `runtime.py`: desktop CPython dataflow scheduler, cooperative cancellation, and session-owned handles.
+- `handlers/`: typed `HandlerContext`, `NodeHandler` protocol, duplicate-safe registry, and category modules for all built-in node behavior. `DataflowRuntime._evaluate` resolves one handler and invokes it; it does not dispatch on node type.
+- `handlers/spinning_drop.py`: domain handlers for Arduino motor/RPM acquisition, wire calibration, pycnometer and delta-density calculation, radius-form Vonnegut IFT, and session-bounded tabular measurement rows. Verified sensor status and error clusters are explicit wires; invalid measurements cannot reach report generation.
 - `protocols.py`: bounded stdlib TCP/UDP and Modbus TCP FC01/02/03/04/05/06/15/16; pyserial loader remains compatibility API.
 - `integrations/`: optional capability/diagnostic, NI-DAQmx, VISA, OPC UA, vision, report, and plugin process adapters. Constructors accept backend injection and do not import optional packages at core startup.
 - `hdl.py`: validated combinational graph-to-Verilog subset and optional bounded Yosys syntax subprocess.
 - `targets.py`: bounded external target manifest/handshake. A response is reported honestly and never upgrades desktop execution into hard RT.
 - `front_panel.py`, `canvas_editor.py`, `app.py`: Tk presentation. Runtime workers never call Tk.
+- `front_panel.py` renders persisted start/stop radio controls, bounded gauges, dropdown metadata, intensity-chart axis labels, and compact tabular indicators used by the spinning-drop example; computation remains in graph nodes.
 
 ## Lifecycle And Bounds
 
@@ -22,6 +25,12 @@ Missing packages produce explicit unavailable capabilities or runtime node error
 
 Process-isolated plugin evaluators exchange bounded JSON with request IDs. They can contain crashes and enforce a parent timeout, but child code retains the user's OS permissions and therefore is not a security sandbox.
 
+## Handler Registry And Extensions
+
+Importing `pylabview.handlers` loads the category modules and populates the default built-in mapping from node type to handler. The frozen-build specs explicitly include those dynamically imported modules. Registry registration fails on duplicates, and `HandlerRegistry.audit` compares the mapping with `NODE_DEFINITIONS`. `DataflowRuntime` also accepts explicit handler and plugin registries so tests and embedding applications can assemble or replace dispatch without mutating global state. Handlers receive runtime services, node, normalized inputs, controls, logs, project/caller identity, session, and graph scope through one immutable context object.
+
+Built-in definitions must have an explicit registered handler. A type absent from the built-in registry crosses the plugin boundary: the runtime first checks an isolated evaluator, then a trusted in-process evaluator, and otherwise reports an unknown node. Plugin output normalization remains owned by the runtime scheduler, so single-output and multi-output behavior share the same path as built-ins.
+
 ## Persistence
 
-Application release 4.0.1 deliberately keeps project schema version 3. New behavior is represented by node type/properties and root/panel extension points, so no v3-to-v4 data migration is necessary.
+Application release 4.1.0 deliberately keeps project schema version 3. New behavior is represented by node type/properties and root/panel extension points, so no v3-to-v4 data migration is necessary.

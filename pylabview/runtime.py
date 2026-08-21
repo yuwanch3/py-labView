@@ -5,23 +5,24 @@ from contextlib import ExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Lock
-from typing import Any, Callable
-import csv
-import math
+from typing import Any, Callable, TYPE_CHECKING
 import random
 import time
 
 from .drivers import ChannelConfig, DriverRegistry
 from .model import Graph, NODE_DEFINITIONS, Node, Project
-from .typesystem import ErrorCluster, Waveform, coerce, compatible
+from .typesystem import coerce, compatible
 from .execution import CancelledError, RunSession
 from .resources import ResourceManager
-from .protocols import MAX_NETWORK_BYTES, ModbusTcpClient, TcpConnection, UdpEndpoint
 from .integrations.opcua_adapter import OpcUaAdapter
 from .integrations.reports_adapter import ReportsAdapter
 from .integrations.serial_adapter import SerialAdapter
 from .integrations.visa_adapter import VisaAdapter
 from .integrations.vision_adapter import VisionAdapter
+from .handlers import BUILTIN_HANDLERS, HandlerContext, HandlerRegistry
+
+if TYPE_CHECKING:
+    from .plugins import PluginRegistry
 
 
 class DataflowError(Exception):
@@ -44,7 +45,12 @@ class DataflowRuntime:
                    drivers: DriverRegistry | None = None, max_sync_workers: int = 64,
                    visa: VisaAdapter | None = None, opcua: OpcUaAdapter | None = None,
                    vision: VisionAdapter | None = None, reports: ReportsAdapter | None = None,
-                   serial: SerialAdapter | None = None) -> None:
+                   serial: SerialAdapter | None = None,
+                   handler_registry: HandlerRegistry | None = None,
+                   plugin_registry: "PluginRegistry | None" = None) -> None:
+        if plugin_registry is None:
+            from .plugins import DEFAULT_PLUGIN_REGISTRY
+            plugin_registry = DEFAULT_PLUGIN_REGISTRY
         self.clock = clock
         self.rng = rng or random.Random()
         self.started_at = self.clock()
@@ -59,6 +65,8 @@ class DataflowRuntime:
         self.vision = vision or VisionAdapter()
         self.reports = reports or ReportsAdapter()
         self.serial = serial or SerialAdapter()
+        self.handlers = handler_registry or BUILTIN_HANDLERS
+        self.plugins = plugin_registry
         self._daq_configured: dict[tuple[str, str], ChannelConfig] = {}
         self._daq_lock = Lock()
 
@@ -322,304 +330,25 @@ class DataflowRuntime:
                   session: RunSession | None = None) -> Any:
         session = session or RunSession(resources=ResourceManager())
         session.token.check()
-        kind = node.type
-        if kind in ("numeric_constant", "string_constant", "boolean_constant", "array_constant"):
-            return controls.get(node.id, node.properties.get("value"))
-        if kind == "bytes_constant": return bytes.fromhex(str(node.properties.get("hex", "")))
-        if kind == "structure_input": return controls.get(node.id, controls.get(str(node.properties.get("name", "value"))))
-        if kind == "iteration_terminal": return controls.get(node.id, controls.get("iteration", 0))
-        if kind == "structure_output": return inputs["value"]
-        if kind == "feedback":
-            key = f"feedback:{caller_vi or 'graph'}:{graph_scope}:{node.id}"
-            return session.state.get(key, node.properties.get("initial", 0.0))
-        if kind in ("add", "subtract", "multiply", "divide", "numeric_min", "numeric_max"):
-            a, b = inputs["a"], inputs["b"]
-            if kind == "divide" and b == 0:
-                raise DataflowError("division by zero")
-            return {"add": a + b, "subtract": a - b, "multiply": a * b,
-                    "divide": a / b if b else 0, "numeric_min": min(a, b), "numeric_max": max(a, b)}[kind]
-        if kind == "absolute": return abs(inputs["x"])
-        if kind == "sine": return math.sin(float(inputs["x"]))
-        if kind == "compare":
-            operators = {">": lambda a, b: a > b, "<": lambda a, b: a < b, "==": lambda a, b: a == b,
-                         ">=": lambda a, b: a >= b, "<=": lambda a, b: a <= b, "!=": lambda a, b: a != b}
-            operator = node.properties.get("operator", ">")
-            if operator not in operators: raise DataflowError(f"unsupported comparison: {operator}")
-            return operators[operator](inputs["a"], inputs["b"])
-        if kind in ("select", "case"): return inputs["true"] if inputs.get("condition", inputs.get("selector")) else inputs["false"]
-        if kind == "sequence": return inputs["second"]
-        if kind == "boolean_and": return inputs["a"] and inputs["b"]
-        if kind == "boolean_or": return inputs["a"] or inputs["b"]
-        if kind == "boolean_not": return not inputs["value"]
-        if kind == "string_concat": return inputs["a"] + inputs["b"]
-        if kind == "string_format":
-            try: return str(node.properties.get("template", "{}")).format(inputs["value"])
-            except (IndexError, KeyError, ValueError) as exc: raise DataflowError(f"invalid format template: {exc}") from exc
-        if kind == "array_build":
-            return (list(inputs["a"]) if isinstance(inputs["a"], list) else [inputs["a"]]) + (list(inputs["b"]) if isinstance(inputs["b"], list) else [inputs["b"]])
-        if kind == "array_index":
-            index = int(inputs["index"])
-            if index != inputs["index"]: raise DataflowError("array index must be an integer")
-            try: return inputs["array"][index]
-            except IndexError as exc: raise DataflowError("array index out of range") from exc
-        if kind == "array_size": return len(inputs["array"])
-        if kind == "cluster_bundle": return {str(node.properties.get("name_a", "a")): inputs["a"], str(node.properties.get("name_b", "b")): inputs["b"]}
-        if kind == "cluster_unbundle":
-            names = (str(node.properties.get("name_a", "a")), str(node.properties.get("name_b", "b")))
-            try: return {"a": inputs["cluster"][names[0]], "b": inputs["cluster"][names[1]]}
-            except KeyError as exc: raise DataflowError(f"cluster field missing: {exc.args[0]}") from exc
-        if kind == "waveform_create": return Waveform(float(inputs["t0"]), float(inputs["dt"]), list(inputs["y"]))
-        if kind == "waveform_stats":
-            values = inputs["waveform"].y
-            if not values: raise DataflowError("waveform has no samples")
-            return {"min": min(values), "max": max(values), "mean": sum(values) / len(values)}
-        if kind == "for_loop":
-            values = inputs["array"]
-            maximum = self._bounded_int(node, "max_iterations", 1000)
-            if len(values) > maximum: raise DataflowError("for-loop iteration bound exceeded")
-            operation, scale = node.properties.get("operation", "identity"), float(node.properties.get("scale", 1))
-            if operation not in ("identity", "abs", "scale"): raise DataflowError("unsupported for-loop operation")
-            return [item if operation == "identity" else abs(item) if operation == "abs" else item * scale for item in values]
-        if kind == "while_loop":
-            value, count = float(inputs["initial"]), 0
-            maximum = self._bounded_int(node, "max_iterations", 100)
-            limit, step, condition = float(node.properties.get("limit", 10)), float(node.properties.get("step", 1)), node.properties.get("condition", "less_than")
-            predicates = {"less_than": lambda x: x < limit, "greater_than": lambda x: x > limit}
-            if condition not in predicates: raise DataflowError("unsupported while-loop condition")
-            while predicates[condition](value) and count < maximum: value, count = value + step, count + 1
-            if predicates[condition](value): raise DataflowError("while-loop iteration bound reached")
-            return value
-        if kind == "random": return self.rng.random()
-        if kind == "timer": return self.clock() - self.started_at
-        if kind == "delay":
-            seconds, maximum = float(node.properties.get("seconds", 0)), float(node.properties.get("maximum_seconds", 5))
-            if seconds < 0 or seconds > maximum: raise DataflowError("delay outside configured bound")
-            if session.token.wait(seconds): raise CancelledError("execution cancelled")
-            return inputs["value"]
-        if kind == "timed_loop":
-            count = self._bounded_int(node, "iterations", 1)
-            if count > self._bounded_int(node, "max_iterations", 1000): raise DataflowError("timed-loop iteration bound exceeded")
-            interval = float(node.properties.get("interval", 0.01))
-            if interval < 0 or interval > 5: raise DataflowError("timed-loop interval outside bound")
-            ticks = []
-            for _ in range(count):
-                session.token.check(); ticks.append(self.clock())
-                if session.token.wait(interval): raise CancelledError("execution cancelled")
-            return ticks
-        if kind in ("analog_input", "daq_finite_input", "digital_input", "analog_output", "digital_output"):
-            return self._daq(node, inputs)
-        if kind == "file_read":
-            try: return {"text": self._safe_path(node).read_text(encoding="utf-8"), "error": ErrorCluster()}
-            except (OSError, ValueError) as exc: return {"text": "", "error": ErrorCluster(True, 20, str(exc))}
-        if kind == "file_write":
-            try: self._safe_path(node).write_text(inputs["text"], encoding="utf-8"); return ErrorCluster()
-            except (OSError, ValueError) as exc: return ErrorCluster(True, 21, str(exc))
-        if kind == "csv_logger":
-            try:
-                path = self._safe_path(node)
-                with path.open("a", newline="", encoding="utf-8") as stream: csv.writer(stream).writerow([inputs["value"]])
-                return ErrorCluster()
-            except (OSError, ValueError) as exc: return ErrorCluster(True, 22, str(exc))
-        if kind == "error_constant": return ErrorCluster(bool(node.properties.get("status", False)), int(node.properties.get("code", 0)), str(node.properties.get("source", "")))
-        if kind == "error_merge": return inputs["a"] if inputs["a"].status else inputs["b"]
-        if kind == "error_handler":
-            error = inputs["error"]
-            if error.status: logs.append(f"ERROR {error.code}: {error.source}")
-            return {"handled": error.status, "message": error.source if error.status else ""}
-        if kind == "queue_create":
-            return self._session_resource(session, caller_vi, node, "queue",
-                                          graph_scope,
-                                          lambda: session.resources.create_queue(self._bounded_int(node, "capacity", 100), str(node.properties.get("type_name", "variant"))))
-        if kind == "queue_put":
-            queue = session.resources.get(inputs["queue"], "queue")
-            queue.put(inputs["value"], float(node.properties.get("timeout", 1)), session.token)
-            return inputs["queue"]
-        if kind == "queue_get":
-            return session.resources.get(inputs["queue"], "queue").get(float(node.properties.get("timeout", 1)), session.token)
-        if kind == "notifier_create":
-            return self._session_resource(session, caller_vi, node, "notifier", graph_scope,
-                                          session.resources.create_notifier)
-        if kind == "notifier_set":
-            return session.resources.get(inputs["notifier"], "notifier").set(inputs["value"])
-        if kind == "notifier_wait":
-            value, generation = session.resources.get(inputs["notifier"], "notifier").wait(
-                int(inputs["generation"]), float(node.properties.get("timeout", 1)), session.token)
-            return {"value": value, "generation": generation}
-        if kind == "event_create":
-            return self._session_resource(session, caller_vi, node, "event",
-                                          graph_scope,
-                                          lambda: session.resources.create_event(str(node.properties.get("name", "event"))))
-        if kind == "event_fire": return session.resources.get(inputs["event"], "event").fire(inputs["value"])
-        if kind == "event_wait":
-            value, generation = session.resources.get(inputs["event"], "event").wait(
-                int(inputs["generation"]), float(node.properties.get("timeout", 1)), session.token)
-            return {"value": value, "generation": generation}
-        if kind == "channel_create":
-            return self._session_resource(session, caller_vi, node, "channel",
-                                          graph_scope,
-                                          lambda: session.resources.create_channel(self._bounded_int(node, "capacity", 100), str(node.properties.get("type_name", "variant"))))
-        if kind == "channel_send":
-            channel = session.resources.get(inputs["channel"], "channel")
-            channel.put(inputs["value"], float(node.properties.get("timeout", 1)), session.token)
-            return inputs["channel"]
-        if kind == "channel_receive":
-            return session.resources.get(inputs["channel"], "channel").get(float(node.properties.get("timeout", 1)), session.token)
-        if kind == "resource_close":
-            session.resources.close(inputs["resource"]); return None
-        if kind == "tcp_connect":
-            return self._session_resource(
-                session, caller_vi, node, "tcp",
-                graph_scope,
-                lambda: session.resources.add("tcp", TcpConnection.connect(
-                    str(node.properties.get("host", "127.0.0.1")), node.properties.get("port", 502),
-                    float(node.properties.get("timeout", 2)), session.token)))
-        if kind == "tcp_read":
-            connection = session.resources.get(inputs["connection"], "tcp")
-            return connection.read(int(node.properties.get("size", 1024)), float(node.properties.get("timeout", 2)),
-                                   session.token, str(node.properties.get("mode", "up_to")),
-                                   bytes.fromhex(str(node.properties.get("delimiter_hex", "0a"))))
-        if kind == "tcp_write":
-            return session.resources.get(inputs["connection"], "tcp").write(
-                inputs["data"], float(node.properties.get("timeout", 2)), session.token)
-        if kind == "udp_open":
-            return self._session_resource(
-                session, caller_vi, node, "udp",
-                graph_scope,
-                lambda: session.resources.add("udp", UdpEndpoint.open(
-                    str(node.properties.get("host", "127.0.0.1")), node.properties.get("port", 0),
-                    float(node.properties.get("timeout", 2)))))
-        if kind == "udp_send":
-            return session.resources.get(inputs["endpoint"], "udp").send(
-                inputs["data"], str(node.properties.get("host", "127.0.0.1")), node.properties.get("port", 9999),
-                float(node.properties.get("timeout", 2)), session.token)
-        if kind == "udp_receive":
-            data, host, port = session.resources.get(inputs["endpoint"], "udp").receive(
-                int(node.properties.get("max_bytes", 65535)), float(node.properties.get("timeout", 2)), session.token)
-            return {"data": data, "host": host, "port": port}
-        if kind == "modbus_connect":
-            return self._session_resource(
-                session, caller_vi, node, "modbus",
-                graph_scope,
-                lambda: session.resources.add("modbus", ModbusTcpClient(
-                    TcpConnection.connect(str(node.properties.get("host", "127.0.0.1")),
-                                          node.properties.get("port", 502),
-                                          float(node.properties.get("timeout", 2)), session.token),
-                    node.properties.get("unit_id", 1))))
-        if kind == "modbus_read_holding":
-            return session.resources.get(inputs["client"], "modbus").read_holding_registers(
-                node.properties.get("address", 0), node.properties.get("quantity", 1),
-                float(node.properties.get("timeout", 2)), session.token)
-        if kind == "modbus_write_register":
-            return session.resources.get(inputs["client"], "modbus").write_single_register(
-                node.properties.get("address", 0), inputs["value"],
-                float(node.properties.get("timeout", 2)), session.token)
-        modbus_reads = {"modbus_read_coils": "read_coils", "modbus_read_discrete": "read_discrete_inputs",
-                         "modbus_read_input": "read_input_registers"}
-        if kind in modbus_reads:
-            return getattr(session.resources.get(inputs["client"], "modbus"), modbus_reads[kind])(
-                node.properties.get("address", 0), node.properties.get("quantity", 1),
-                float(node.properties.get("timeout", 2)), session.token)
-        modbus_writes = {"modbus_write_coil": "write_single_coil", "modbus_write_coils": "write_multiple_coils",
-                          "modbus_write_registers": "write_multiple_registers"}
-        if kind in modbus_writes:
-            value = inputs["value"] if kind == "modbus_write_coil" else inputs["values"]
-            return getattr(session.resources.get(inputs["client"], "modbus"), modbus_writes[kind])(
-                node.properties.get("address", 0), value, float(node.properties.get("timeout", 2)), session.token)
-        if kind == "serial_open":
-            return self._session_resource(
-                session, caller_vi, node, "serial",
-                graph_scope,
-                 lambda: session.resources.add("serial", self.serial.open(
-                    str(node.properties.get("port", "COM1")), int(node.properties.get("baudrate", 9600)),
-                     float(node.properties.get("timeout", 1)))))
-        if kind == "serial_read":
-            size = self._bounded_int(node, "size", 1024)
-            if size < 1 or size > MAX_NETWORK_BYTES: raise DataflowError("serial size is outside bounds")
-            data = session.resources.get(inputs["connection"], "serial").read(size)
-            if len(data) > size: raise DataflowError("serial backend exceeded requested size")
-            if node.properties.get("mode", "bytes") == "text":
-                return bytes(data).decode(str(node.properties.get("encoding", "utf-8")))
-            return bytes(data)
-        if kind == "serial_write":
-            data = inputs["data"]
-            mode = node.properties.get("mode", "bytes")
-            if mode == "text": data = str(data).encode(str(node.properties.get("encoding", "utf-8")))
-            if not isinstance(data, bytes): raise DataflowError("serial bytes mode requires bytes")
-            if not 1 <= len(data) <= MAX_NETWORK_BYTES: raise DataflowError("serial write size is outside bounds")
-            return int(session.resources.get(inputs["connection"], "serial").write(data))
-        if kind == "serial_close": session.resources.close(inputs["connection"]); return None
-        if kind == "visa_open":
-            return self._session_resource(session, caller_vi, node, "visa", graph_scope,
-                lambda: session.resources.add("visa", self.visa.open(str(node.properties.get("resource", "")),
-                    float(node.properties.get("timeout", 2)), int(node.properties.get("max_bytes", 1048576)))))
-        if kind in ("visa_write", "visa_query", "visa_read_raw", "visa_write_raw"):
-            instrument = session.resources.get(inputs["instrument"], "visa")
-            if kind == "visa_write": return instrument.write(inputs["text"])
-            if kind == "visa_query": return instrument.query(inputs["text"])
-            if kind == "visa_read_raw": return instrument.read_raw()
-            return instrument.write_raw(inputs["data"])
-        if kind == "visa_close": session.resources.close(inputs["instrument"]); return None
-        if kind == "opcua_connect":
-            return self._session_resource(session, caller_vi, node, "opcua", graph_scope,
-                lambda: session.resources.add("opcua", self.opcua.connect(str(node.properties.get("endpoint", "")),
-                    float(node.properties.get("timeout", 2)))))
-        if kind == "opcua_read":
-            return session.resources.get(inputs["connection"], "opcua").read(str(node.properties.get("node_id", "")))
-        if kind == "opcua_write":
-            session.resources.get(inputs["connection"], "opcua").write(str(node.properties.get("node_id", "")), inputs["value"]); return None
-        if kind == "opcua_disconnect": session.resources.close(inputs["connection"]); return None
-        if kind == "image_read": return self.vision.read(self._safe_path(node))
-        if kind == "camera_capture": return self.vision.capture(int(node.properties.get("camera_index", 0)))
-        if kind == "image_grayscale": return self.vision.grayscale(inputs["image"])
-        if kind == "image_blur": return self.vision.blur(inputs["image"], int(node.properties.get("kernel", 5)))
-        if kind == "image_threshold": return self.vision.threshold(inputs["image"], node.properties.get("threshold", 127), node.properties.get("maximum", 255))
-        if kind == "image_canny": return self.vision.canny(inputs["image"], node.properties.get("low", 50), node.properties.get("high", 150))
-        if kind == "image_resize": return self.vision.resize(inputs["image"], node.properties.get("width", 640), node.properties.get("height", 480))
-        if kind == "template_match": return self.vision.template_match(inputs["image"], inputs["template"])
-        if kind == "image_save":
-            try: self.vision.save(inputs["image"], self._safe_path(node)); return ErrorCluster()
-            except (OSError, ValueError, RuntimeError) as exc: return ErrorCluster(True, 40, str(exc))
-        if kind == "report_generate":
-            try:
-                path = self.reports.generate(inputs["data"], self._safe_path(node), str(node.properties.get("format", "html")), str(node.properties.get("title", "PyLabView Report")))
-                return {"path": str(path), "error": ErrorCluster()}
-            except (OSError, ValueError, RuntimeError, ImportError) as exc:
-                return {"path": "", "error": ErrorCluster(True, 50, str(exc))}
-        if kind == "visual_case":
-            diagram_id = str(node.properties.get("true_diagram" if inputs["selector"] else "false_diagram", ""))
-            return self._run_structure(project, caller_vi, diagram_id, inputs["value"], 0, session)
-        if kind == "visual_for":
-            values = inputs["array"]
-            maximum = self._bounded_int(node, "max_iterations", 1000)
-            if len(values) > maximum: raise DataflowError("visual for-loop iteration bound exceeded")
-            diagram_id = str(node.properties.get("body_diagram", ""))
-            return [self._run_structure(project, caller_vi, diagram_id, value, index, session)
-                    for index, value in enumerate(values)]
-        if kind == "subvi":
-            if not project: raise DataflowError("SubVI requires a project")
-            target = str(node.properties.get("vi_id", ""))
-            child = self.run_project(project, target, inputs, session=session)
-            session.token.check()
-            if child.errors: raise DataflowError("; ".join(child.errors))
-            logs.extend(child.logs)
-            vi = project.vis[target]
-            return {terminal.name: child.port_values[(terminal.node_id, terminal.port)] for terminal in vi.connector_outputs}
-        if kind in ("display", "chart"): return inputs["value"]
-        if kind == "image_display": return inputs["image"]
-        if kind == "log":
-            value = inputs["value"]; logs.append(f"{node.properties.get('prefix', '')}{value}"); return value
-        from .plugins import DEFAULT_PLUGIN_REGISTRY
-        isolated = DEFAULT_PLUGIN_REGISTRY.isolated(kind)
+        context = HandlerContext(self, node, inputs, controls, logs, project, caller_vi, session, graph_scope)
+        handler = self.handlers.resolve(node.type)
+        if handler is not None:
+            return handler(context)
+        return self._evaluate_plugin(context)
+
+    def _evaluate_plugin(self, context: HandlerContext) -> Any:
+        isolated = self.plugins.isolated(context.node.type)
         if isolated:
             from .integrations.isolation import IsolatedEvaluatorHost
             evaluator, timeout = isolated
             with IsolatedEvaluatorHost(evaluator) as host:
-                return host.call({"node": {"id": node.id, "type": node.type, "properties": node.properties},
-                                  "inputs": inputs}, timeout)
-        evaluator = DEFAULT_PLUGIN_REGISTRY.evaluator(kind)
+                return host.call({"node": {"id": context.node.id, "type": context.node.type,
+                                           "properties": context.node.properties},
+                                  "inputs": context.inputs}, timeout)
+        evaluator = self.plugins.evaluator(context.node.type)
         if evaluator:
-            return evaluator(node, inputs, session)
-        raise DataflowError(f"unknown node type: {kind}")
+            return evaluator(context.node, context.inputs, context.session)
+        raise DataflowError(f"unknown node type: {context.node.type}")
 
     def _run_structure(self, project: Project | None, vi_id: str | None, diagram_id: str,
                        value: Any, iteration: int, session: RunSession) -> Any:
@@ -697,6 +426,7 @@ _WAIT_NODE_TYPES = {
     "tcp_connect", "tcp_read", "udp_receive", "modbus_connect", "modbus_read_holding",
     "modbus_read_coils", "modbus_read_discrete", "modbus_read_input", "serial_open", "serial_read",
     "visa_open", "visa_query", "visa_read_raw", "opcua_connect", "opcua_read", "camera_capture",
+    "arduino_motor_rpm", "camera_capture_dual_mode",
     "subvi", "visual_case", "visual_for",
 }
 

@@ -16,6 +16,9 @@ class CancelledError(RuntimeError):
 class CancellationToken:
     def __init__(self) -> None:
         self._event = Event()
+        self._callback_lock = Lock()
+        self._callbacks: list[Callable[[], None]] = []
+        self._callback_errors: list[str] = []
 
     @property
     def cancelled(self) -> bool:
@@ -23,6 +26,32 @@ class CancellationToken:
 
     def cancel(self) -> None:
         self._event.set()
+        with self._callback_lock:
+            callbacks, self._callbacks = self._callbacks, []
+        for callback in callbacks:
+            try:
+                callback()
+            except Exception as exc:
+                with self._callback_lock:
+                    self._callback_errors.append(str(exc))
+
+    def add_cancel_callback(self, callback: Callable[[], None]) -> None:
+        if not callable(callback):
+            raise TypeError("cancellation callback must be callable")
+        with self._callback_lock:
+            if not self.cancelled:
+                self._callbacks.append(callback)
+                return
+        try:
+            callback()
+        except Exception as exc:
+            with self._callback_lock:
+                self._callback_errors.append(str(exc))
+
+    @property
+    def callback_errors(self) -> tuple[str, ...]:
+        with self._callback_lock:
+            return tuple(self._callback_errors)
 
     def check(self) -> None:
         if self.cancelled:
@@ -219,6 +248,8 @@ class RunController:
     def stop(self) -> None:
         if self.session:
             self.session.token.cancel()
+            for message in self.session.token.callback_errors:
+                self.session.debugger.emit("cancel_callback_failed", message=message)
             self.session.debugger.cancel_wait()
 
     def join(self, timeout: float | None = None) -> bool:

@@ -44,11 +44,11 @@ App version adalah 4.0.1; format persisted tetap `pylabview-project` schema vers
 python -m unittest discover -s tests -v
 python -m compileall -q pylabview tests
 python -m pylabview --self-test
-python -c "from pathlib import Path; from pylabview.persistence import load_project; from pylabview.runtime import DataflowRuntime; [DataflowRuntime().run_project(load_project(p)) for p in Path('examples').glob('*.json')]"
+python -c "from pathlib import Path; from pylabview.persistence import load_project; from pylabview.runtime import DataflowRuntime; [(p, DataflowRuntime().validate(project.main.graph, project, project.main_vi)) for p in Path('examples').glob('*.json') for project in [load_project(p)]]"
 git diff --check
 ```
 
-Test tidak mengakses internet atau hardware. Adapter hardware diuji dengan fake backend; protocol memakai loopback/stub lokal. OpenCV/NumPy aktual hanya dijalankan oleh full-profile frozen self-test. Lihat `docs/V4_INSTRUMENTATION_GUIDE.md` dan `docs/HARDWARE_VALIDATION.md` untuk support matrix.
+Test tidak mengakses internet atau hardware. Adapter hardware diuji dengan fake backend; protocol memakai loopback/stub lokal. OpenCV/NumPy aktual hanya dijalankan oleh full-profile frozen self-test. `examples/spinning_drop_ift.json` adalah proyek hardware prototype dan hanya dimuat/divalidasi oleh perintah di atas; menjalankannya memerlukan Arduino, sensor RPM, kamera, dan kalibrasi kawat yang sesuai. Lihat `docs/V4_INSTRUMENTATION_GUIDE.md` dan `docs/HARDWARE_VALIDATION.md` untuk support matrix.
 
 ## Windows Builds
 

@@ -143,6 +143,44 @@ NODE_DEFINITIONS: dict[str, NodeDefinition] = {
     "image_save": _d("Save Image", "Vision", ("image",), ("error",), {"path": "output.png"}, input_types=(IMAGE,), output_types=(ERROR,)),
     "image_display": _d("Image Indicator", "Outputs", ("image",), (), {"display_type": "image"}, "indicator", input_types=(IMAGE,)),
     "report_generate": _d("Generate Report", "Reports", ("data",), ("path", "error"), {"path": "report.html", "format": "html", "title": "PyLabView Report"}, output_types=(STRING, ERROR)),
+    "arduino_motor_rpm": _d("Arduino Motor / RPM", "Spinning Drop IFT", ("port", "pwm"),
+                              ("rpm", "pwm_actual", "sensor_status", "error"),
+                              {"baudrate": 115200, "timeout": 1.0, "response_bytes": 256,
+                               "protocol_note": "SET_PWM/ACK_PWM/RPM text protocol; confirm against original VI"},
+                              input_types=(STRING, NUMERIC), output_types=(NUMERIC, NUMERIC, STRING, ERROR)),
+    "camera_capture_dual_mode": _d("Camera Capture (USB / Network)", "Spinning Drop IFT",
+                                    ("mode", "device_index", "network_url", "timeout_seconds"), ("image",),
+                                    defaults={"measurement_duration_seconds": 1.0,
+                                              "time_field_note": "Assumed measurement duration; confirm against original VI"},
+                                    input_types=(STRING, NUMERIC, STRING, NUMERIC), output_types=(IMAGE,)),
+    "edge_intensity_profile": _d("Edge Intensity Profile", "Spinning Drop IFT", ("image", "scan_orientation"),
+                                  ("intensity_profile", "edge_image", "diameter_px"),
+                                  {"threshold": 127.0, "foreground": "dark"},
+                                  input_types=(IMAGE, STRING), output_types=(ARRAY, IMAGE, NUMERIC)),
+    "wire_calibration": _d("Wire Calibration", "Spinning Drop IFT",
+                            ("diameter_px", "known_wire_diameter_mm"), ("scale_factor_mm_per_px",),
+                            input_types=(NUMERIC, NUMERIC), output_types=(NUMERIC,)),
+    "pixel_to_mm": _d("Pixel Diameter to mm", "Spinning Drop IFT",
+                       ("diameter_px", "scale_factor_mm_per_px"), ("diameter_mm",),
+                       input_types=(NUMERIC, NUMERIC), output_types=(NUMERIC,)),
+    "vonnegut_ift": _d("Vonnegut IFT (Radius Form)", "Spinning Drop IFT",
+                        ("rpm", "diameter_mm", "delta_rho", "sensor_status"),
+                        ("omega_squared", "radius_cubed", "ift_N_m", "ift_mN_m", "error"),
+                        input_types=(NUMERIC, NUMERIC, NUMERIC, STRING),
+                        output_types=(NUMERIC, NUMERIC, NUMERIC, NUMERIC, ERROR)),
+    "pycnometer_density": _d("Pycnometer Density", "Spinning Drop IFT",
+                              ("bottle_weight_empty_g", "bottle_weight_gross_g", "volume_ml"),
+                              ("density_g_ml", "density_kg_m3"),
+                              input_types=(NUMERIC, NUMERIC, NUMERIC), output_types=(NUMERIC, NUMERIC)),
+    "delta_density": _d("Absolute Density Difference", "Spinning Drop IFT", ("density_1", "density_2"),
+                         ("delta_rho",), input_types=(NUMERIC, NUMERIC), output_types=(NUMERIC,)),
+    "spinning_drop_log_row": _d("Build Spinning Drop Log Row", "Spinning Drop IFT",
+                                 ("rpm", "diameter_px", "diameter_mm", "delta_rho", "omega_squared",
+                                  "radius_cubed", "ift_N_m", "ift_mN_m", "motor_error", "ift_error"), ("table_data",),
+                                 {"max_rows": 1000},
+                                 input_types=(NUMERIC, NUMERIC, NUMERIC, NUMERIC, NUMERIC, NUMERIC, NUMERIC, NUMERIC,
+                                              ERROR, ERROR),
+                                 output_types=(ARRAY,)),
 }
 
 
@@ -241,46 +279,7 @@ class Graph:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Graph":
         try:
-            if not isinstance(data, dict):
-                raise ValueError("graph must be an object")
-            standalone = "format" in data or "version" in data
-            expected = ({"format", "version", "name", "nodes", "wires"} if standalone
-                        else {"name", "nodes", "wires"})
-            if set(data) != expected:
-                raise ValueError("invalid graph schema")
-            if standalone and (data["format"] != "pylabview-project" or type(data["version"]) is not int
-                               or data["version"] != 1):
-                raise ValueError("unsupported graph format version")
-            if not isinstance(data["name"], str) or not isinstance(data["nodes"], list) or not isinstance(data["wires"], list):
-                raise ValueError("invalid graph fields")
-            graph = cls(data["name"])
-            for item in data["nodes"]:
-                if not isinstance(item, dict) or set(item) != {"id", "type", "x", "y", "label", "properties"}:
-                    raise ValueError("invalid node schema")
-                node = Node(**item)
-                if (not isinstance(node.id, str) or not node.id or node.id in graph.nodes
-                        or not isinstance(node.type, str) or node.type not in NODE_DEFINITIONS
-                        or not isinstance(node.label, str) or not isinstance(node.properties, dict)
-                        or isinstance(node.x, bool) or not isinstance(node.x, (int, float)) or not math.isfinite(node.x)
-                        or isinstance(node.y, bool) or not isinstance(node.y, (int, float)) or not math.isfinite(node.y)):
-                    raise ValueError(f"invalid or duplicate node: {node.id}")
-                graph.nodes[node.id] = node
-            required_wire = {"source_node", "source_port", "target_node", "target_port"}
-            for item in data["wires"]:
-                if (not isinstance(item, dict) or not required_wire <= set(item)
-                        or not set(item) <= required_wire | {"data_type"}
-                        or any(not isinstance(item[key], str) or not item[key] for key in required_wire)
-                        or ("data_type" in item and item["data_type"] not in DATA_TYPES)):
-                    raise ValueError("invalid wire schema")
-                if item["source_node"] not in graph.nodes or item["target_node"] not in graph.nodes:
-                    raise ValueError("wire references a missing node")
-                source, target = graph.nodes[item["source_node"]], graph.nodes[item["target_node"]]
-                if "subvi" in (source.type, target.type):
-                    graph.wires.append(Wire(item["source_node"], item["source_port"], item["target_node"],
-                                            item["target_port"], item.get("data_type", VARIANT)))
-                else:
-                    graph.connect(item["source_node"], item["source_port"], item["target_node"], item["target_port"])
-            return graph
+            return _parse_graph(cls, data)
         except ValueError:
             raise
         except (AttributeError, KeyError, StopIteration, TypeError) as exc:
@@ -369,74 +368,7 @@ class Project:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Project":
         try:
-            if not isinstance(data, dict):
-                raise ValueError("project must be an object")
-            version = data.get("version")
-            required = {"format", "version", "name", "main_vi", "vis"} | ({"extensions"} if version == 3 else set())
-            if set(data) != required:
-                raise ValueError(f"invalid project v{version} schema")
-            if data["format"] != "pylabview-project" or type(version) is not int or version not in (2, 3):
-                raise ValueError("unsupported project format version")
-            if (not isinstance(data["name"], str) or not isinstance(data["main_vi"], str) or not data["main_vi"]
-                    or not isinstance(data["vis"], list) or not data["vis"]):
-                raise ValueError("invalid project fields")
-            project = cls.__new__(cls)
-            project.name, project.main_vi, project.vis = data["name"], data["main_vi"], {}
-            project.extensions = copy.deepcopy(data.get("extensions", {}))
-            project.migration_report = []
-            if not isinstance(project.extensions, dict):
-                raise ValueError("project extensions must be an object")
-            vi_names: set[str] = set()
-            terminal_fields = {"name", "node_id", "port", "data_type"}
-            for item in data["vis"]:
-                vi_fields = {"id", "name", "graph", "connector_pane", "front_panel"} | ({"subdiagrams"} if version == 3 else set())
-                if not isinstance(item, dict) or set(item) != vi_fields:
-                    raise ValueError("invalid VI schema")
-                if (not isinstance(item["id"], str) or not item["id"] or item["id"] in project.vis
-                        or not isinstance(item["name"], str) or not item["name"]
-                        or item["name"] in vi_names
-                        or not isinstance(item["front_panel"], dict)):
-                    raise ValueError("invalid or duplicate VI")
-                vi_names.add(item["name"])
-                pane = item["connector_pane"]
-                if (not isinstance(pane, dict) or set(pane) != {"inputs", "outputs"}
-                        or not isinstance(pane["inputs"], list) or not isinstance(pane["outputs"], list)):
-                    raise ValueError("invalid connector pane")
-                terminals: list[list[ConnectorTerminal]] = []
-                for entries in (pane["inputs"], pane["outputs"]):
-                    parsed: list[ConnectorTerminal] = []
-                    for terminal in entries:
-                        if (not isinstance(terminal, dict) or set(terminal) != terminal_fields
-                                or any(not isinstance(terminal[key], str) or not terminal[key]
-                                       for key in ("name", "node_id", "port"))
-                                or terminal["data_type"] not in DATA_TYPES):
-                            raise ValueError("invalid connector terminal schema")
-                        parsed.append(ConnectorTerminal(**terminal))
-                    terminals.append(parsed)
-                graph = Graph.from_dict(item["graph"])
-                subdiagrams: dict[str, Graph] = {}
-                raw_subdiagrams = item.get("subdiagrams", {})
-                if not isinstance(raw_subdiagrams, dict) or any(not isinstance(key, str) or not key for key in raw_subdiagrams):
-                    raise ValueError("invalid subdiagram schema")
-                for diagram_id, diagram_data in raw_subdiagrams.items():
-                    subdiagrams[diagram_id] = Graph.from_dict(diagram_data)
-                panel = _validate_panel(item["front_panel"], graph) if version == 3 else _normalized_panel(item["front_panel"], graph)
-                project.vis[item["id"]] = VirtualInstrument(
-                    item["id"], item["name"], graph, terminals[0], terminals[1], panel, subdiagrams
-                )
-            if project.main_vi not in project.vis:
-                raise ValueError("main_vi references a missing VI")
-            project._bind_graphs()
-            for vi in project.vis.values():
-                for graph in _vi_graphs(vi):
-                    wires, graph.wires = graph.wires, []
-                    for wire in wires:
-                        graph.connect(wire.source_node, wire.source_port, wire.target_node, wire.target_port)
-            project.validate_structures()
-            project.validate_connectors()
-            if version == 2:
-                project.migration_report = ["Migrated project v2 to v3", "Generated free-layout Front Panel bounds"]
-            return project
+            return _parse_project(cls, data)
         except ValueError:
             raise
         except (AttributeError, KeyError, StopIteration, TypeError) as exc:
@@ -510,6 +442,148 @@ class Project:
             vi.graph.project = self
             for graph in vi.subdiagrams.values():
                 graph.project = self
+
+
+def _parse_graph(cls: type[Graph], data: dict[str, Any]) -> Graph:
+    standalone = _validate_graph_root(data)
+    graph = cls(data["name"])
+    for item in data["nodes"]:
+        node = _parse_node(item, graph.nodes)
+        graph.nodes[node.id] = node
+    for item in data["wires"]:
+        _parse_wire(item, graph)
+    return graph
+
+
+def _validate_graph_root(data: Any) -> bool:
+    if not isinstance(data, dict):
+        raise ValueError("graph must be an object")
+    standalone = "format" in data or "version" in data
+    expected = {"format", "version", "name", "nodes", "wires"} if standalone else {"name", "nodes", "wires"}
+    if set(data) != expected:
+        raise ValueError("invalid graph schema")
+    if standalone and (data["format"] != "pylabview-project" or type(data["version"]) is not int
+                       or data["version"] != 1):
+        raise ValueError("unsupported graph format version")
+    if not isinstance(data["name"], str) or not isinstance(data["nodes"], list) or not isinstance(data["wires"], list):
+        raise ValueError("invalid graph fields")
+    return standalone
+
+
+def _parse_node(item: Any, existing: dict[str, Node]) -> Node:
+    if not isinstance(item, dict) or set(item) != {"id", "type", "x", "y", "label", "properties"}:
+        raise ValueError("invalid node schema")
+    node = Node(**item)
+    if (not isinstance(node.id, str) or not node.id or node.id in existing
+            or not isinstance(node.type, str) or node.type not in NODE_DEFINITIONS
+            or not isinstance(node.label, str) or not isinstance(node.properties, dict)
+            or isinstance(node.x, bool) or not isinstance(node.x, (int, float)) or not math.isfinite(node.x)
+            or isinstance(node.y, bool) or not isinstance(node.y, (int, float)) or not math.isfinite(node.y)):
+        raise ValueError(f"invalid or duplicate node: {node.id}")
+    return node
+
+
+def _parse_wire(item: Any, graph: Graph) -> None:
+    required = {"source_node", "source_port", "target_node", "target_port"}
+    if (not isinstance(item, dict) or not required <= set(item) or not set(item) <= required | {"data_type"}
+            or any(not isinstance(item[key], str) or not item[key] for key in required)
+            or ("data_type" in item and item["data_type"] not in DATA_TYPES)):
+        raise ValueError("invalid wire schema")
+    if item["source_node"] not in graph.nodes or item["target_node"] not in graph.nodes:
+        raise ValueError("wire references a missing node")
+    source, target = graph.nodes[item["source_node"]], graph.nodes[item["target_node"]]
+    if "subvi" in (source.type, target.type):
+        graph.wires.append(Wire(item["source_node"], item["source_port"], item["target_node"],
+                                item["target_port"], item.get("data_type", VARIANT)))
+    else:
+        graph.connect(item["source_node"], item["source_port"], item["target_node"], item["target_port"])
+
+
+def _parse_project(cls: type[Project], data: dict[str, Any]) -> Project:
+    version = _validate_project_root(data)
+    project = cls.__new__(cls)
+    project.name, project.main_vi, project.vis = data["name"], data["main_vi"], {}
+    project.extensions = copy.deepcopy(data.get("extensions", {}))
+    project.migration_report = []
+    if not isinstance(project.extensions, dict):
+        raise ValueError("project extensions must be an object")
+    vi_names: set[str] = set()
+    for item in data["vis"]:
+        vi = _parse_vi(item, version, project.vis, vi_names)
+        project.vis[vi.id] = vi
+    if project.main_vi not in project.vis:
+        raise ValueError("main_vi references a missing VI")
+    _finalize_project(project)
+    if version == 2:
+        project.migration_report = ["Migrated project v2 to v3", "Generated free-layout Front Panel bounds"]
+    return project
+
+
+def _validate_project_root(data: Any) -> int:
+    if not isinstance(data, dict):
+        raise ValueError("project must be an object")
+    version = data.get("version")
+    required = {"format", "version", "name", "main_vi", "vis"} | ({"extensions"} if version == 3 else set())
+    if set(data) != required:
+        raise ValueError(f"invalid project v{version} schema")
+    if data["format"] != "pylabview-project" or type(version) is not int or version not in (2, 3):
+        raise ValueError("unsupported project format version")
+    if (not isinstance(data["name"], str) or not isinstance(data["main_vi"], str) or not data["main_vi"]
+            or not isinstance(data["vis"], list) or not data["vis"]):
+        raise ValueError("invalid project fields")
+    return version
+
+
+def _parse_vi(item: Any, version: int, existing: dict[str, VirtualInstrument], names: set[str]) -> VirtualInstrument:
+    fields = {"id", "name", "graph", "connector_pane", "front_panel"} | ({"subdiagrams"} if version == 3 else set())
+    if not isinstance(item, dict) or set(item) != fields:
+        raise ValueError("invalid VI schema")
+    if (not isinstance(item["id"], str) or not item["id"] or item["id"] in existing
+            or not isinstance(item["name"], str) or not item["name"] or item["name"] in names
+            or not isinstance(item["front_panel"], dict)):
+        raise ValueError("invalid or duplicate VI")
+    names.add(item["name"])
+    inputs, outputs = _parse_connector_pane(item["connector_pane"])
+    graph = Graph.from_dict(item["graph"])
+    subdiagrams = _parse_subdiagrams(item.get("subdiagrams", {}))
+    panel = _validate_panel(item["front_panel"], graph) if version == 3 else _normalized_panel(item["front_panel"], graph)
+    return VirtualInstrument(item["id"], item["name"], graph, inputs, outputs, panel, subdiagrams)
+
+
+def _parse_connector_pane(pane: Any) -> tuple[list[ConnectorTerminal], list[ConnectorTerminal]]:
+    if (not isinstance(pane, dict) or set(pane) != {"inputs", "outputs"}
+            or not isinstance(pane["inputs"], list) or not isinstance(pane["outputs"], list)):
+        raise ValueError("invalid connector pane")
+    return (_parse_connectors(pane["inputs"]), _parse_connectors(pane["outputs"]))
+
+
+def _parse_connectors(entries: list[Any]) -> list[ConnectorTerminal]:
+    fields = {"name", "node_id", "port", "data_type"}
+    parsed = []
+    for terminal in entries:
+        if (not isinstance(terminal, dict) or set(terminal) != fields
+                or any(not isinstance(terminal[key], str) or not terminal[key] for key in ("name", "node_id", "port"))
+                or terminal["data_type"] not in DATA_TYPES):
+            raise ValueError("invalid connector terminal schema")
+        parsed.append(ConnectorTerminal(**terminal))
+    return parsed
+
+
+def _parse_subdiagrams(raw: Any) -> dict[str, Graph]:
+    if not isinstance(raw, dict) or any(not isinstance(key, str) or not key for key in raw):
+        raise ValueError("invalid subdiagram schema")
+    return {diagram_id: Graph.from_dict(data) for diagram_id, data in raw.items()}
+
+
+def _finalize_project(project: Project) -> None:
+    project._bind_graphs()
+    for vi in project.vis.values():
+        for graph in _vi_graphs(vi):
+            wires, graph.wires = graph.wires, []
+            for wire in wires:
+                graph.connect(wire.source_node, wire.source_port, wire.target_node, wire.target_port)
+    project.validate_structures()
+    project.validate_connectors()
 
 
 def _normalized_panel(panel: dict[str, Any], graph: Graph) -> dict[str, Any]:
