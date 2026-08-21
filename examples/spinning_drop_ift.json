@@ -70,7 +70,6 @@
           {"source_node":"arduino","source_port":"rpm","target_node":"sequencer","target_port":"rpm_measured","data_type":"numeric"},
           {"source_node":"arduino","source_port":"sensor_status","target_node":"sequencer","target_port":"sensor_status","data_type":"string"},
           {"source_node":"arduino","source_port":"error","target_node":"sequencer","target_port":"motor_error","data_type":"error"},
-          {"source_node":"oil_camera","source_port":"error","target_node":"sequencer","target_port":"capture_error","data_type":"error"},
           {"source_node":"ift","source_port":"ift_mN_m","target_node":"sequencer","target_port":"ift_mN_m","data_type":"numeric"},
           {"source_node":"oil_edge","source_port":"diameter_px","target_node":"sequencer","target_port":"diameter_px","data_type":"numeric"},
           {"source_node":"drop_mm","source_port":"diameter_mm","target_node":"sequencer","target_port":"diameter_mm","data_type":"numeric"},
