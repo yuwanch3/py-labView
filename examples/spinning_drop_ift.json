@@ -145,7 +145,7 @@
           {"id":"count_display","type":"display","x":1490,"y":100,"label":"Stage Countdown (s)","properties":{"display_type":"numeric","style":"default"}},
           {"source_node":"sequencer","source_port":"state","target_node":"state_display","target_port":"value","data_type":"string"},
           {"source_node":"sequencer","source_port":"countdown","target_node":"count_display","target_port":"value","data_type":"numeric"},
-          {"source_node":"sequencer","source_port":"table_data","target_node":"table_display","target_port":"value","data_type":"array"},
+          {"source_node":"sequencer","source_port":"table_data","target_node":"table_display","target_port":"value","data_type":"array"}
         ]
       },
       "connector_pane": {"inputs": [], "outputs": []},
