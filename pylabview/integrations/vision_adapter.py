@@ -4,11 +4,15 @@ from dataclasses import dataclass
 from importlib import import_module
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
+from threading import Lock
+import math
 
 
 MAX_IMAGE_PIXELS = 100_000_000
 MAX_IMAGE_FILE_BYTES = 256 * 1024 * 1024
 MAX_IMAGE_MEMORY_BYTES = 512 * 1024 * 1024
+MAX_PROFILE_PIXELS = 4_000_000
 SUPPORTED_IMAGE_DTYPES = {"uint8", "uint16", "float32", "float64"}
 
 
@@ -40,6 +44,7 @@ class ImageFrame:
 class VisionAdapter:
     def __init__(self, cv2_backend: Any = None, numpy_backend: Any = None) -> None:
         self.cv2, self.numpy = cv2_backend, numpy_backend
+        self._capture_lock = Lock()
 
     @property
     def available(self) -> bool:
@@ -70,16 +75,48 @@ class VisionAdapter:
         if payload is None: raise OSError(f"unable to read image: {path.name}")
         return self._frame(payload)
 
-    def capture(self, camera_index: int = 0) -> ImageFrame:
+    def capture(self, camera_index: int | str = 0, timeout: float = 5.0) -> ImageFrame:
         cv2, _ = self._backends()
-        if not 0 <= int(camera_index) <= 64: raise ValueError("camera index must be between 0 and 64")
-        capture = cv2.VideoCapture(int(camera_index))
-        try:
-            if not capture.isOpened(): raise OSError("camera could not be opened")
-            ok, payload = capture.read()
-            if not ok or payload is None: raise OSError("camera did not return a frame")
-            return self._frame(payload)
-        finally: capture.release()
+        timeout = float(timeout)
+        if not math.isfinite(timeout) or timeout <= 0 or timeout > 300:
+            raise ValueError("camera timeout must be greater than 0 and at most 300 seconds")
+        if isinstance(camera_index, str):
+            source = camera_index.strip()
+            parsed = urlsplit(source)
+            if len(source) > 2048 or parsed.scheme not in ("http", "https", "rtsp") or not parsed.netloc:
+                raise ValueError("network camera URL must use http, https, or rtsp")
+        else:
+            source = int(camera_index)
+            if not 0 <= source <= 64: raise ValueError("camera index must be between 0 and 64")
+        with self._capture_lock:
+            timeout_ms = max(1, int(timeout * 1000))
+            parameters = []
+            for name in ("CAP_PROP_OPEN_TIMEOUT_MSEC", "CAP_PROP_READ_TIMEOUT_MSEC"):
+                if hasattr(cv2, name):
+                    parameters.extend((getattr(cv2, name), timeout_ms))
+            try:
+                capture = (cv2.VideoCapture(source, getattr(cv2, "CAP_ANY", 0), parameters)
+                           if parameters else cv2.VideoCapture(source))
+            except TypeError:
+                capture = cv2.VideoCapture(source)
+            try:
+                if not capture.isOpened(): raise OSError("camera could not be opened")
+                ok, payload = capture.read()
+                if not ok or payload is None: raise OSError("camera did not return a frame")
+                return self._frame(payload)
+            finally: capture.release()
+
+    def capture_source(self, mode: str, device_index: Any, network_url: Any, timeout: float = 5.0) -> ImageFrame:
+        mode = str(mode).strip().lower()
+        if mode == "usb":
+            if isinstance(device_index, bool) or isinstance(device_index, float) and not device_index.is_integer():
+                raise ValueError("USB camera source must be an integer device index")
+            return self.capture(int(device_index), timeout)
+        if mode == "network":
+            if not isinstance(network_url, str):
+                raise ValueError("network camera source must be a URL string")
+            return self.capture(network_url, timeout)
+        raise ValueError("camera mode must be 'usb' or 'network'")
 
     def grayscale(self, frame: ImageFrame) -> ImageFrame:
         frame = self._require_frame(frame)
@@ -97,6 +134,41 @@ class VisionAdapter:
         cv2, _ = self._backends(); source = self.grayscale(frame)
         _, payload = cv2.threshold(source.payload, float(threshold), float(maximum), cv2.THRESH_BINARY)
         return self._frame(payload)
+
+    def edge_intensity_profile(self, frame: ImageFrame, orientation: str, threshold: float = 127,
+                               foreground: str = "dark") -> dict[str, Any]:
+        source = self.grayscale(self._require_frame(frame))
+        if source.width * source.height > MAX_PROFILE_PIXELS:
+            raise ValueError("edge profile image exceeds the 4 million pixel processing bound")
+        orientation = str(orientation).strip().lower()
+        if orientation not in ("horizontal", "vertical"):
+            raise ValueError("scan orientation must be 'horizontal' or 'vertical'")
+        threshold = float(threshold)
+        if not math.isfinite(threshold) or threshold < 0:
+            raise ValueError("edge threshold must be finite and non-negative")
+        foreground = str(foreground).strip().lower()
+        if foreground not in ("dark", "light"):
+            raise ValueError("edge foreground must be 'dark' or 'light'")
+        try:
+            scanline = (source.payload[source.height // 2] if orientation == "horizontal"
+                        else source.payload[:, source.width // 2])
+            profile = [float(value) for value in scanline.tolist()]
+        except (IndexError, TypeError):
+            rows = source.payload.tolist()
+            if not isinstance(rows, list) or len(rows) != source.height or any(
+                    not isinstance(row, list) or len(row) != source.width for row in rows):
+                raise ValueError("image payload cannot be converted to a pixel matrix")
+            profile = ([float(value) for value in rows[source.height // 2]] if orientation == "horizontal"
+                       else [float(row[source.width // 2]) for row in rows])
+        active = [(value <= threshold) if foreground == "dark" else (value >= threshold) for value in profile]
+        longest = current = 0
+        for enabled in active:
+            current = current + 1 if enabled else 0
+            longest = max(longest, current)
+        if longest == 0:
+            raise ValueError("no foreground region crosses the configured threshold")
+        return {"intensity_profile": profile, "edge_image": self.threshold(source, threshold, 255),
+                "diameter_px": float(longest)}
 
     def canny(self, frame: ImageFrame, low: float, high: float) -> ImageFrame:
         frame = self._require_frame(frame)

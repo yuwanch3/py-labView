@@ -102,105 +102,103 @@ class StudioApp(tk.Tk):
         self.configure(menu=menu)
 
     def _build_ui(self) -> None:
+        self._build_toolbar()
+        work, console = self._build_panes()
+        library, center, inspector = self._build_workspace_panes(work)
+        self._build_library(library)
+        self._build_workspace(center)
+        self._build_inspector(inspector)
+        self._build_console(console)
+        self._build_status()
+
+    def _build_toolbar(self) -> None:
         toolbar = ttk.Frame(self, style="Toolbar.TFrame", padding=6)
         toolbar.pack(fill="x")
-        ttk.Button(toolbar, text="New", command=self.new_project).pack(side="left", padx=2)
-        ttk.Button(toolbar, text="Open", command=self.open_project).pack(side="left", padx=2)
-        ttk.Button(toolbar, text="Save", command=self.save_project).pack(side="left", padx=2)
+        for text, command in (("New", self.new_project), ("Open", self.open_project), ("Save", self.save_project)):
+            ttk.Button(toolbar, text=text, command=command).pack(side="left", padx=2)
         ttk.Separator(toolbar, orient="vertical").pack(side="left", fill="y", padx=8)
         ttk.Button(toolbar, text="Run Once", style="Run.TButton", command=self.run_once).pack(side="left", padx=2)
         self.run_button = ttk.Button(toolbar, text="Continuous", command=self.toggle_continuous)
         self.run_button.pack(side="left", padx=2)
-        ttk.Button(toolbar, text="Stop", command=self.stop).pack(side="left", padx=2)
-        ttk.Button(toolbar, text="Front Panel", command=self.show_front_panel).pack(side="left", padx=10)
-        ttk.Button(toolbar, text="Validate", command=self.validate_current).pack(side="left", padx=2)
-        ttk.Button(toolbar, text="Connector", command=self.configure_connector).pack(side="left", padx=2)
-        ttk.Button(toolbar, text="Create SubVI", command=self.create_subvi).pack(side="left", padx=2)
-        ttk.Button(toolbar, text="Breakpoint", command=self.toggle_breakpoint).pack(side="left", padx=2)
-        ttk.Button(toolbar, text="Probe", command=self.toggle_probe).pack(side="left", padx=2)
-        ttk.Button(toolbar, text="Open Structure", command=self.open_structure).pack(side="left", padx=2)
-        ttk.Button(toolbar, text="Root Diagram", command=self.open_root_diagram).pack(side="left", padx=2)
+        actions = (("Stop", self.stop), ("Front Panel", self.show_front_panel), ("Validate", self.validate_current),
+                   ("Connector", self.configure_connector), ("Create SubVI", self.create_subvi),
+                   ("Breakpoint", self.toggle_breakpoint), ("Probe", self.toggle_probe),
+                   ("Open Structure", self.open_structure), ("Root Diagram", self.open_root_diagram))
+        for text, command in actions:
+            ttk.Button(toolbar, text=text, command=command).pack(side="left", padx=10 if text == "Front Panel" else 2)
         self.zoom_label = ttk.Label(toolbar, text="Ctrl+wheel: zoom")
         self.zoom_label.pack(side="right", padx=8)
 
+    def _build_panes(self):
         vertical = ttk.Panedwindow(self, orient="vertical")
         vertical.pack(fill="both", expand=True)
         work = ttk.Panedwindow(vertical, orient="horizontal")
         vertical.add(work, weight=5)
-        console_frame = ttk.Frame(vertical, padding=4)
-        vertical.add(console_frame, weight=1)
+        console = ttk.Frame(vertical, padding=4)
+        vertical.add(console, weight=1)
+        return work, console
 
-        library = ttk.LabelFrame(work, text="Node Library", padding=6)
-        center = ttk.Frame(work)
-        inspector = ttk.LabelFrame(work, text="Properties", padding=8)
-        work.add(library, weight=1)
-        work.add(center, weight=5)
-        work.add(inspector, weight=1)
+    def _build_workspace_panes(self, work):
+        panes = (ttk.LabelFrame(work, text="Node Library", padding=6), ttk.Frame(work),
+                 ttk.LabelFrame(work, text="Properties", padding=8))
+        for pane, weight in zip(panes, (1, 5, 1)):
+            work.add(pane, weight=weight)
+        return panes
 
+    def _build_library(self, library) -> None:
         ttk.Label(library, text="VI Explorer", font=("TkDefaultFont", 10, "bold")).pack(anchor="w")
         self.vi_list = tk.Listbox(library, height=5, exportselection=False)
-        self.vi_list.pack(fill="x", pady=(3, 2))
-        self.vi_list.bind("<<ListboxSelect>>", self._switch_vi_event)
-        vi_buttons = ttk.Frame(library)
-        vi_buttons.pack(fill="x", pady=(0, 8))
-        ttk.Button(vi_buttons, text="+", width=3, command=self.add_vi).pack(side="left")
-        ttk.Button(vi_buttons, text="Rename", command=self.rename_vi).pack(side="left", padx=2)
-        ttk.Button(vi_buttons, text="Delete", command=self.delete_vi).pack(side="left")
-        ttk.Button(vi_buttons, text="Main", command=self.set_main_vi).pack(side="left", padx=2)
+        self.vi_list.pack(fill="x", pady=(3, 2)); self.vi_list.bind("<<ListboxSelect>>", self._switch_vi_event)
+        buttons = ttk.Frame(library); buttons.pack(fill="x", pady=(0, 8))
+        for text, width, command in (("+", 3, self.add_vi), ("Rename", None, self.rename_vi),
+                                     ("Delete", None, self.delete_vi), ("Main", None, self.set_main_vi)):
+            options = {"width": width} if width else {}
+            ttk.Button(buttons, text=text, command=command, **options).pack(side="left", padx=2 if text in ("Rename", "Main") else 0)
         ttk.Label(library, text="Node Search", font=("TkDefaultFont", 10, "bold")).pack(anchor="w")
-        self.search_var = tk.StringVar()
-        search = ttk.Entry(library, textvariable=self.search_var)
-        search.pack(fill="x", pady=(3, 4))
+        self.search_var = tk.StringVar(); ttk.Entry(library, textvariable=self.search_var).pack(fill="x", pady=(3, 4))
         self.search_var.trace_add("write", lambda *_args: self._populate_library())
         self.library_tree = ttk.Treeview(library, show="tree", selectmode="browse")
-        self.library_tree.pack(fill="both", expand=True)
-        self._populate_library()
-        self._refresh_vi_list()
-        self.library_tree.bind("<Double-1>", self._library_add)
+        self.library_tree.pack(fill="both", expand=True); self.library_tree.bind("<Double-1>", self._library_add)
+        self._populate_library(); self._refresh_vi_list()
         ttk.Label(library, text="Double-click to add", foreground="#58677a").pack(pady=(5, 0))
 
-        self.workspace = ttk.Notebook(center)
-        self.workspace.pack(fill="both", expand=True)
-        panel_tab = ttk.Frame(self.workspace)
-        diagram_tab = ttk.Frame(self.workspace)
-        self.workspace.add(panel_tab, text="Front Panel")
-        self.workspace.add(diagram_tab, text="Block Diagram")
-        panel_tools = ttk.Frame(panel_tab, padding=4)
-        panel_tools.pack(fill="x")
-        ttk.Button(panel_tools, text="Edit", command=lambda: self.front_panel.set_mode("edit")).pack(side="left")
-        ttk.Button(panel_tools, text="Operate", command=lambda: self.front_panel.set_mode("operate")).pack(side="left", padx=4)
-        self.project.main.front_panel = self.project.main.front_panel if "items" in self.project.main.front_panel else self.project.to_dict()["vis"][0]["front_panel"]
+    def _build_workspace(self, center) -> None:
+        self.workspace = ttk.Notebook(center); self.workspace.pack(fill="both", expand=True)
+        panel_tab, diagram_tab = ttk.Frame(self.workspace), ttk.Frame(self.workspace)
+        self.workspace.add(panel_tab, text="Front Panel"); self.workspace.add(diagram_tab, text="Block Diagram")
+        tools = ttk.Frame(panel_tab, padding=4); tools.pack(fill="x")
+        ttk.Button(tools, text="Edit", command=lambda: self.front_panel.set_mode("edit")).pack(side="left")
+        ttk.Button(tools, text="Operate", command=lambda: self.front_panel.set_mode("operate")).pack(side="left", padx=4)
+        panel = self.project.main.front_panel
+        self.project.main.front_panel = panel if "items" in panel else self.project.to_dict()["vis"][0]["front_panel"]
         self.front_panel = PanelDesigner(panel_tab, self.graph, self.project.main.front_panel,
                                          self._panel_changed, self._panel_values_changed)
-        self.project.main.front_panel = self.front_panel.panel
-        self.front_panel.pack(fill="both", expand=True)
+        self.project.main.front_panel = self.front_panel.panel; self.front_panel.pack(fill="both", expand=True)
         self.canvas = DiagramCanvas(diagram_tab, self.graph, self.select_node, self.checkpoint, self.changed,
                                     self._connection_error, self._delete_node_resources)
         self.canvas.pack(fill="both", expand=True)
 
-        self.inspector_body = ttk.Frame(inspector)
-        self.inspector_body.pack(fill="both", expand=True)
+    def _build_inspector(self, inspector) -> None:
+        self.inspector_body = ttk.Frame(inspector); self.inspector_body.pack(fill="both", expand=True)
         self.select_node(None)
 
-        output_tabs = ttk.Notebook(console_frame)
-        output_tabs.pack(fill="both", expand=True)
-        log_tab, debug_tab = ttk.Frame(output_tabs), ttk.Frame(output_tabs)
-        output_tabs.add(log_tab, text="Execution Log")
-        output_tabs.add(debug_tab, text="Debugger Trace")
-        self.console = tk.Text(log_tab, height=7, background="#10151d", foreground="#d7e1ef", insertbackground="white", font=("TkFixedFont", 9), state="disabled")
-        scroll = ttk.Scrollbar(log_tab, command=self.console.yview)
-        self.console.configure(yscrollcommand=scroll.set)
-        self.console.pack(side="left", fill="both", expand=True)
-        scroll.pack(side="right", fill="y")
-        debug_buttons = ttk.Frame(debug_tab)
-        debug_buttons.pack(fill="x")
-        ttk.Button(debug_buttons, text="Pause", command=self.pause_run).pack(side="left")
-        ttk.Button(debug_buttons, text="Resume", command=self.resume_run).pack(side="left", padx=3)
-        ttk.Button(debug_buttons, text="Step", command=self.step_run).pack(side="left")
+    def _build_console(self, frame) -> None:
+        tabs = ttk.Notebook(frame); tabs.pack(fill="both", expand=True)
+        log_tab, debug_tab = ttk.Frame(tabs), ttk.Frame(tabs)
+        tabs.add(log_tab, text="Execution Log"); tabs.add(debug_tab, text="Debugger Trace")
+        self.console = tk.Text(log_tab, height=7, background="#10151d", foreground="#d7e1ef",
+                               insertbackground="white", font=("TkFixedFont", 9), state="disabled")
+        scroll = ttk.Scrollbar(log_tab, command=self.console.yview); self.console.configure(yscrollcommand=scroll.set)
+        self.console.pack(side="left", fill="both", expand=True); scroll.pack(side="right", fill="y")
+        buttons = ttk.Frame(debug_tab); buttons.pack(fill="x")
+        for text, command in (("Pause", self.pause_run), ("Resume", self.resume_run), ("Step", self.step_run)):
+            ttk.Button(buttons, text=text, command=command).pack(side="left", padx=3 if text == "Resume" else 0)
         self.trace_tree = ttk.Treeview(debug_tab, columns=("seq", "event", "node", "value"), show="headings", height=6)
         for column, width in (("seq", 55), ("event", 120), ("node", 130), ("value", 500)):
             self.trace_tree.heading(column, text=column.title()); self.trace_tree.column(column, width=width)
         self.trace_tree.pack(fill="both", expand=True)
+
+    def _build_status(self) -> None:
         self.status_var = tk.StringVar(value="Ready")
         ttk.Label(self, textvariable=self.status_var, anchor="w", padding=(7, 3)).pack(fill="x")
 

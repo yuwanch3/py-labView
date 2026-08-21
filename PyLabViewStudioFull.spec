@@ -4,7 +4,12 @@ from PyInstaller.utils.hooks import collect_all
 
 root = Path(SPECPATH)
 hiddenimports = ["pylabview.app", "pylabview.integrations.capabilities", "pylabview.integrations.nidaqmx_adapter",
-                 "pylabview.integrations.visa_adapter", "pylabview.integrations.opcua_adapter",
+                  "pylabview.handlers.core_math", "pylabview.handlers.collections",
+                  "pylabview.handlers.structures", "pylabview.handlers.sync", "pylabview.handlers.io",
+                  "pylabview.handlers.instrumentation", "pylabview.handlers.vision",
+                  "pylabview.handlers.network", "pylabview.handlers.project",
+                  "pylabview.handlers.spinning_drop",
+                  "pylabview.integrations.visa_adapter", "pylabview.integrations.opcua_adapter",
                  "pylabview.integrations.serial_adapter",
                  "pylabview.integrations.vision_adapter", "pylabview.integrations.reports_adapter",
                  "pylabview.integrations.isolation", "pylabview.hdl", "pylabview.targets"]
