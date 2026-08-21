@@ -15,7 +15,7 @@
 | External RT target | Handshake contract only | Fake socket | No qualified target |
 | Spinning-drop IFT tensiometer prototype (Arduino/BTS7960, RPM pulse sensor, dual-mode camera) | Modelled/implemented for automated evaluation | Injected serial/OpenCV backends, firmware-protocol parsing (telemetry/ACK/TARGET_RPM), event-driven stage watcher, PC-side RPM stall watchdog, image-profile and Vonnegut tests | **Not performed** |
 
-PyLabView Studio 4.3.0 is not safety-rated, medically certified, hard real-time, or qualified for control of hazardous processes. Users must perform device-specific installation, calibration, electrical protection, fault handling, cybersecurity, and acceptance testing.
+PyLabView Studio 4.3.1 is not safety-rated, medically certified, hard real-time, or qualified for control of hazardous processes. Users must perform device-specific installation, calibration, electrical protection, fault handling, cybersecurity, and acceptance testing.
 
 The handler-registry, parser, and UI decomposition is an internal refactor. It adds no physical hardware evidence and does not change any physical-validation outcome above.
 
@@ -32,7 +32,7 @@ The Arduino exchange is no longer provisional. The original firmware source was 
 - PC to Arduino, plain text plus newline: `START` (firmware begins its own 6-stage sequence at 1000 RPM) and `STOP` (forced stop; the firmware replies `ACK:STOP`).
 - Firmware replies: `ACK:START`, `ACK:STOP`, and `ACK:AUTOSTOP_6000` — the last is sent autonomously by the firmware after 3 minutes at 6000 RPM, without a PC request.
 - Continuous telemetry while running (~100 ms cadence): `RPM:<int>;PWM:<int>;TIME:<float 3dp>;TARGET:<int>`. `TIME` is seconds since the last target change. The parser tolerates garbage and partial lines; incomplete chunks stay buffered until their newline arrives.
-- Stage-change event, sent once per firmware-initiated RPM step: `TARGET_RPM:<int>`.
+- Stage-change event, sent once per firmware-initiated RPM step: `TARGET_RPM:<int>`. The initial 1000 RPM target is **not** announced: receiving `START` makes the firmware ramp to a hardcoded 1000 RPM silently, so `TARGET_RPM` events only ever fire for the increments to 2000–6000. The stage watcher therefore seeds its "previous stage" record with 1000 at the IDLE→RUNNING transition; without this, the lowest data point would be silently lost in every experiment.
 
 Architecture consequence: the 6-stage RPM sequencing (1000–6000 RPM, 3 minutes per stage, autostop after 6000) is entirely a firmware responsibility. PyLabView Studio is a passive event listener — `spinning_drop_stage_watcher` appends one table row per stage-completion event (five `TARGET_RPM` events plus the final `ACK:AUTOSTOP_6000`) and never measures stage duration itself. An earlier PC-side sequencer node that duplicated this timing was removed. The PC never sends PWM values; RPM arrives already computed by the firmware (4 holes per revolution on the sensor disc), and no pulse-to-RPM calculation exists anywhere in the PC codebase.
 

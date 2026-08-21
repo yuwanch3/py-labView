@@ -41,7 +41,7 @@ REMOVE = {
     "delta_display",
     # old request-response motor node
     "arduino",
-    # v4.3.0 PC-side sequencer experiment (duplicated firmware logic)
+    # v4.3.1 PC-side sequencer experiment (duplicated firmware logic)
     "sequencer", "cam_err", "pwm_fb", "state_display", "count_display",
 }
 before = {node["id"] for node in nodes}

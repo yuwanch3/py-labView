@@ -161,8 +161,11 @@ def spinning_drop_stage_watcher(context: HandlerContext):
     this node NEVER measures stage duration itself. A row is appended exactly
     when the firmware reports the next TARGET_RPM (meaning the previous stage
     finished its hold) or when it announces ACK:AUTOSTOP_6000 (final 6000 RPM
-    row). Full cycle yields exactly 6 rows: 5 from TARGET_RPM events plus the
-    final one from the autostop acknowledgement."""
+    row). The firmware never announces its initial target: receiving START
+    makes it ramp to a hardcoded 1000 RPM without any serial event, so the
+    IDLE->RUNNING transition seeds last_target=1000 here. Full cycle yields
+    exactly 6 rows: five TARGET_RPM events (2000..6000) complete stages
+    1000..5000, and the autostop acknowledgement completes 6000."""
     headers = ["RPM", "Dia (px)", "Dia (mm)", "kg/m3", "w²", "r³", "IFT N/m", "IFT mN/m"]
     measured = ("diameter_px", "diameter_mm", "delta_rho", "omega_squared",
                 "radius_cubed", "ift_N_m", "ift_mN_m")
@@ -188,6 +191,12 @@ def spinning_drop_stage_watcher(context: HandlerContext):
 
     if state["s"] == "IDLE":
         state["s"] = "RUNNING"
+        # The firmware hardcodes targetRPM=1000 when START is received and
+        # never announces it on serial; TARGET_RPM events only fire on the
+        # increments to 2000..6000. Seed the implicit initial target here so
+        # the first TARGET_RPM:2000 event completes stage 1000 instead of
+        # silently dropping it.
+        state["last_target"] = 1000.0
 
     if state["s"] == "RUNNING":
         def snapshot(completed_rpm: float) -> list[float]:
