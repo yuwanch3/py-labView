@@ -79,8 +79,6 @@
           {"source_node":"ift","source_port":"ift_N_m","target_node":"sequencer","target_port":"ift_N_m","data_type":"numeric"},
 
           {"source_node":"sequencer","source_port":"target_pwm","target_node":"arduino","target_port":"pwm","data_type":"numeric"},
-          {"source_node":"sequencer","source_port":"trigger_capture","target_node":"oil_camera","target_port":"trigger","data_type":"boolean"},
-          {"source_node":"sequencer","source_port":"trigger_capture","target_node":"wire_camera","target_port":"trigger","data_type":"boolean"},
 
           {"source_node":"oil_mode","source_port":"out","target_node":"oil_camera","target_port":"mode","data_type":"string"},
           {"source_node":"oil_source","source_port":"out","target_node":"oil_camera","target_port":"device_index","data_type":"numeric"},
