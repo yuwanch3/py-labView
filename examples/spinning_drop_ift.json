@@ -66,37 +66,13 @@
             }
           },
           {
-            "id": "time_duration",
-            "type": "numeric_constant",
-            "x": 20,
-            "y": 500,
-            "label": "TIME(s) Measurement Duration",
-            "properties": {
-              "value": 30.0,
-              "display_type": "numeric",
-              "assumption": "Function unconfirmed; treated as measurement duration"
-            }
-          },
-          {
-            "id": "time_interval",
-            "type": "numeric_constant",
-            "x": 20,
-            "y": 580,
-            "label": "TIME(s) Sampling Interval",
-            "properties": {
-              "value": 1.0,
-              "display_type": "numeric",
-              "assumption": "Function unconfirmed; treated as sampling interval"
-            }
-          },
-          {
             "id": "wire_known",
             "type": "numeric_constant",
             "x": 20,
             "y": 660,
             "label": "Known Wire Diameter (mm)",
             "properties": {
-              "value": 0.0,
+              "value": 0.8,
               "display_type": "numeric",
               "requires_manual_measurement": true
             }
@@ -121,125 +97,6 @@
             "properties": {
               "value": "horizontal",
               "display_type": "string"
-            }
-          },
-          {
-            "id": "outer_empty",
-            "type": "numeric_constant",
-            "x": 220,
-            "y": 20,
-            "label": "Outer Empty Weight (g)",
-            "properties": {
-              "value": 14.55,
-              "display_type": "numeric"
-            }
-          },
-          {
-            "id": "outer_gross",
-            "type": "numeric_constant",
-            "x": 220,
-            "y": 100,
-            "label": "Outer Gross Weight (g)",
-            "properties": {
-              "value": 25.23,
-              "display_type": "numeric"
-            }
-          },
-          {
-            "id": "outer_volume",
-            "type": "numeric_constant",
-            "x": 220,
-            "y": 180,
-            "label": "Outer Volume (mL)",
-            "properties": {
-              "value": 11.2,
-              "display_type": "numeric"
-            }
-          },
-          {
-            "id": "drop_empty",
-            "type": "numeric_constant",
-            "x": 220,
-            "y": 260,
-            "label": "Drop Empty Weight (g)",
-            "properties": {
-              "value": 14.97,
-              "display_type": "numeric"
-            }
-          },
-          {
-            "id": "drop_gross",
-            "type": "numeric_constant",
-            "x": 220,
-            "y": 340,
-            "label": "Drop Gross Weight (g)",
-            "properties": {
-              "value": 27.3,
-              "display_type": "numeric"
-            }
-          },
-          {
-            "id": "drop_volume",
-            "type": "numeric_constant",
-            "x": 220,
-            "y": 420,
-            "label": "Drop Volume (mL)",
-            "properties": {
-              "value": 12.2,
-              "display_type": "numeric"
-            }
-          },
-          {
-            "id": "pwm_zero",
-            "type": "analog_input",
-            "x": 220,
-            "y": 520,
-            "label": "PWM STOP = 0",
-            "properties": {
-              "driver": "simulated",
-              "channel": "PWM_STOP",
-              "minimum": 0.0,
-              "maximum": 0.0,
-              "samples": 1,
-              "rate": 1000.0,
-              "timeout": 2.0
-            }
-          },
-          {
-            "id": "pwm_start",
-            "type": "analog_input",
-            "x": 220,
-            "y": 600,
-            "label": "PWM START = 255",
-            "properties": {
-              "driver": "simulated",
-              "channel": "PWM_START",
-              "minimum": 255.0,
-              "maximum": 255.0,
-              "samples": 1,
-              "rate": 1000.0,
-              "timeout": 2.0
-            }
-          },
-          {
-            "id": "pwm_select",
-            "type": "select",
-            "x": 430,
-            "y": 80,
-            "label": "Motor START Selects PWM",
-            "properties": {}
-          },
-          {
-            "id": "arduino",
-            "type": "arduino_motor_rpm",
-            "x": 630,
-            "y": 80,
-            "label": "Arduino Uno / BTS7960 / RPM Sensor",
-            "properties": {
-              "baudrate": 115200,
-              "timeout": 1.0,
-              "response_bytes": 256,
-              "protocol_note": "SET_PWM/ACK_PWM/RPM text protocol; confirm against original VI"
             }
           },
           {
@@ -303,43 +160,11 @@
             "properties": {}
           },
           {
-            "id": "outer_density",
-            "type": "pycnometer_density",
-            "x": 430,
-            "y": 580,
-            "label": "Outer Fluid Pycnometer Density",
-            "properties": {}
-          },
-          {
-            "id": "drop_density",
-            "type": "pycnometer_density",
-            "x": 430,
-            "y": 720,
-            "label": "Drop Fluid Pycnometer Density",
-            "properties": {}
-          },
-          {
-            "id": "density_delta",
-            "type": "delta_density",
-            "x": 670,
-            "y": 650,
-            "label": "Selisih Densitas kg/m3",
-            "properties": {}
-          },
-          {
             "id": "ift",
             "type": "vonnegut_ift",
             "x": 1270,
             "y": 300,
             "label": "Vonnegut IFT Radius Form",
-            "properties": {}
-          },
-          {
-            "id": "log_row",
-            "type": "spinning_drop_log_row",
-            "x": 1490,
-            "y": 300,
-            "label": "IFT Measurement Table Row",
             "properties": {}
           },
           {
@@ -465,17 +290,6 @@
             }
           },
           {
-            "id": "delta_display",
-            "type": "display",
-            "x": 880,
-            "y": 660,
-            "label": "Selisih Densitas (kg/m3)",
-            "properties": {
-              "display_type": "numeric",
-              "style": "default"
-            }
-          },
-          {
             "id": "omega_display",
             "type": "display",
             "x": 1290,
@@ -531,62 +345,87 @@
             }
           },
           {
-            "id": "cam_err",
-            "type": "error_constant",
-            "x": 220,
-            "y": 900,
-            "label": "Camera Error Status",
-            "properties": {
-              "status": false,
-              "code": 0,
-              "source": ""
-            }
-          },
-          {
-            "id": "sequencer",
-            "type": "spinning_drop_sequencer",
+            "id": "reader",
+            "type": "arduino_telemetry_reader",
             "x": 430,
+            "y": 80,
+            "label": "Arduino Telemetry Reader",
+            "properties": {
+              "baudrate": 115200,
+              "timeout": 0.2,
+              "max_lines": 32,
+              "response_bytes": 4096
+            }
+          },
+          {
+            "id": "stall_guard",
+            "type": "rpm_stall_watchdog",
+            "x": 870,
+            "y": 80,
+            "label": "RPM Stall Watchdog (PC-side inference)",
+            "properties": {
+              "stall_seconds": 10.0
+            }
+          },
+          {
+            "id": "watcher",
+            "type": "spinning_drop_stage_watcher",
+            "x": 1270,
+            "y": 80,
+            "label": "Spinning Drop Stage Watcher",
+            "properties": {}
+          },
+          {
+            "id": "cam_timeout",
+            "type": "numeric_constant",
+            "x": 20,
+            "y": 500,
+            "label": "Camera Timeout (s)",
+            "properties": {
+              "value": 1.0,
+              "display_type": "numeric"
+            }
+          },
+          {
+            "id": "density_input",
+            "type": "numeric_constant",
+            "x": 20,
+            "y": 580,
+            "label": "Selisih Densitas (Kg/m3)",
+            "properties": {
+              "value": 0.0,
+              "display_type": "numeric",
+              "requires_manual_entry": "operator enters the measured density difference"
+            }
+          },
+          {
+            "id": "global_stop",
+            "type": "boolean_constant",
+            "x": 20,
             "y": 900,
-            "label": "Spinning Drop Sequencer",
+            "label": "STOP",
             "properties": {
-              "rpm_list": [
-                1000,
-                2000,
-                3000,
-                4000,
-                5000,
-                6000
-              ],
-              "stage_duration": 180.0
+              "value": false,
+              "display_type": "boolean"
             }
           },
           {
-            "id": "pwm_fb",
-            "type": "feedback",
-            "x": 530,
-            "y": 160,
-            "label": "PWM Feedback (1 pass delay)",
-            "properties": {
-              "initial": 0.0
-            }
-          },
-          {
-            "id": "state_display",
+            "id": "time_display_1",
             "type": "display",
             "x": 1700,
             "y": 20,
-            "label": "Sequencer State",
+            "label": "TIME(s)",
             "properties": {
-              "display_type": "auto",
+              "display_type": "numeric",
               "style": "default"
             }
           },
           {
-            "id": "count_display",
+            "id": "time_display_2",
             "type": "display",
             "x": 1700,
             "y": 100,
-            "label": "Stage Countdown (s)",
+            "label": "TIME(s)",
             "properties": {
               "display_type": "numeric",
               "style": "default"
@@ -595,32 +434,32 @@
         ],
         "wires": [
           {
+            "source_node": "com",
+            "source_port": "out",
+            "target_node": "reader",
+            "target_port": "port",
+            "data_type": "string"
+          },
+          {
             "source_node": "motor",
             "source_port": "out",
-            "target_node": "pwm_select",
-            "target_port": "condition",
+            "target_node": "reader",
+            "target_port": "run",
             "data_type": "boolean"
           },
           {
-            "source_node": "pwm_start",
+            "source_node": "motor",
             "source_port": "out",
-            "target_node": "pwm_select",
-            "target_port": "true",
-            "data_type": "numeric"
+            "target_node": "watcher",
+            "target_port": "run",
+            "data_type": "boolean"
           },
           {
-            "source_node": "pwm_zero",
+            "source_node": "motor",
             "source_port": "out",
-            "target_node": "pwm_select",
-            "target_port": "false",
-            "data_type": "numeric"
-          },
-          {
-            "source_node": "com",
-            "source_port": "out",
-            "target_node": "arduino",
-            "target_port": "port",
-            "data_type": "string"
+            "target_node": "stall_guard",
+            "target_port": "run",
+            "data_type": "boolean"
           },
           {
             "source_node": "oil_mode",
@@ -644,7 +483,7 @@
             "data_type": "string"
           },
           {
-            "source_node": "time_duration",
+            "source_node": "cam_timeout",
             "source_port": "out",
             "target_node": "oil_camera",
             "target_port": "timeout_seconds",
@@ -672,7 +511,7 @@
             "data_type": "string"
           },
           {
-            "source_node": "time_duration",
+            "source_node": "cam_timeout",
             "source_port": "out",
             "target_node": "wire_camera",
             "target_port": "timeout_seconds",
@@ -735,63 +574,7 @@
             "data_type": "numeric"
           },
           {
-            "source_node": "outer_empty",
-            "source_port": "out",
-            "target_node": "outer_density",
-            "target_port": "bottle_weight_empty_g",
-            "data_type": "numeric"
-          },
-          {
-            "source_node": "outer_gross",
-            "source_port": "out",
-            "target_node": "outer_density",
-            "target_port": "bottle_weight_gross_g",
-            "data_type": "numeric"
-          },
-          {
-            "source_node": "outer_volume",
-            "source_port": "out",
-            "target_node": "outer_density",
-            "target_port": "volume_ml",
-            "data_type": "numeric"
-          },
-          {
-            "source_node": "drop_empty",
-            "source_port": "out",
-            "target_node": "drop_density",
-            "target_port": "bottle_weight_empty_g",
-            "data_type": "numeric"
-          },
-          {
-            "source_node": "drop_gross",
-            "source_port": "out",
-            "target_node": "drop_density",
-            "target_port": "bottle_weight_gross_g",
-            "data_type": "numeric"
-          },
-          {
-            "source_node": "drop_volume",
-            "source_port": "out",
-            "target_node": "drop_density",
-            "target_port": "volume_ml",
-            "data_type": "numeric"
-          },
-          {
-            "source_node": "outer_density",
-            "source_port": "density_kg_m3",
-            "target_node": "density_delta",
-            "target_port": "density_1",
-            "data_type": "numeric"
-          },
-          {
-            "source_node": "drop_density",
-            "source_port": "density_kg_m3",
-            "target_node": "density_delta",
-            "target_port": "density_2",
-            "data_type": "numeric"
-          },
-          {
-            "source_node": "arduino",
+            "source_node": "reader",
             "source_port": "rpm",
             "target_node": "ift",
             "target_port": "rpm",
@@ -805,107 +588,170 @@
             "data_type": "numeric"
           },
           {
-            "source_node": "density_delta",
-            "source_port": "delta_rho",
+            "source_node": "density_input",
+            "source_port": "out",
             "target_node": "ift",
             "target_port": "delta_rho",
             "data_type": "numeric"
           },
           {
-            "source_node": "arduino",
-            "source_port": "sensor_status",
-            "target_node": "ift",
-            "target_port": "sensor_status",
-            "data_type": "string"
-          },
-          {
-            "source_node": "arduino",
+            "source_node": "reader",
             "source_port": "rpm",
-            "target_node": "log_row",
+            "target_node": "watcher",
             "target_port": "rpm",
             "data_type": "numeric"
           },
           {
+            "source_node": "reader",
+            "source_port": "pwm",
+            "target_node": "watcher",
+            "target_port": "pwm",
+            "data_type": "numeric"
+          },
+          {
+            "source_node": "reader",
+            "source_port": "elapsed_time_s",
+            "target_node": "watcher",
+            "target_port": "elapsed_time_s",
+            "data_type": "numeric"
+          },
+          {
+            "source_node": "reader",
+            "source_port": "current_target_rpm",
+            "target_node": "watcher",
+            "target_port": "current_target_rpm",
+            "data_type": "numeric"
+          },
+          {
+            "source_node": "reader",
+            "source_port": "stage_changed",
+            "target_node": "watcher",
+            "target_port": "stage_changed",
+            "data_type": "boolean"
+          },
+          {
+            "source_node": "reader",
+            "source_port": "autostop",
+            "target_node": "watcher",
+            "target_port": "autostop",
+            "data_type": "boolean"
+          },
+          {
+            "source_node": "reader",
+            "source_port": "error",
+            "target_node": "watcher",
+            "target_port": "error",
+            "data_type": "error"
+          },
+          {
+            "source_node": "stall_guard",
+            "source_port": "stalled",
+            "target_node": "watcher",
+            "target_port": "stalled",
+            "data_type": "boolean"
+          },
+          {
             "source_node": "oil_edge",
             "source_port": "diameter_px",
-            "target_node": "log_row",
+            "target_node": "watcher",
             "target_port": "diameter_px",
             "data_type": "numeric"
           },
           {
             "source_node": "drop_mm",
             "source_port": "diameter_mm",
-            "target_node": "log_row",
+            "target_node": "watcher",
             "target_port": "diameter_mm",
             "data_type": "numeric"
           },
           {
-            "source_node": "density_delta",
-            "source_port": "delta_rho",
-            "target_node": "log_row",
+            "source_node": "density_input",
+            "source_port": "out",
+            "target_node": "watcher",
             "target_port": "delta_rho",
             "data_type": "numeric"
           },
           {
             "source_node": "ift",
             "source_port": "omega_squared",
-            "target_node": "log_row",
+            "target_node": "watcher",
             "target_port": "omega_squared",
             "data_type": "numeric"
           },
           {
             "source_node": "ift",
             "source_port": "radius_cubed",
-            "target_node": "log_row",
+            "target_node": "watcher",
             "target_port": "radius_cubed",
             "data_type": "numeric"
           },
           {
             "source_node": "ift",
             "source_port": "ift_N_m",
-            "target_node": "log_row",
+            "target_node": "watcher",
             "target_port": "ift_N_m",
             "data_type": "numeric"
           },
           {
             "source_node": "ift",
             "source_port": "ift_mN_m",
-            "target_node": "log_row",
+            "target_node": "watcher",
             "target_port": "ift_mN_m",
             "data_type": "numeric"
           },
           {
-            "source_node": "arduino",
-            "source_port": "error",
-            "target_node": "log_row",
-            "target_port": "motor_error",
-            "data_type": "error"
+            "source_node": "reader",
+            "source_port": "rpm",
+            "target_node": "stall_guard",
+            "target_port": "rpm",
+            "data_type": "numeric"
           },
           {
-            "source_node": "ift",
-            "source_port": "error",
-            "target_node": "log_row",
-            "target_port": "ift_error",
-            "data_type": "error"
+            "source_node": "reader",
+            "source_port": "current_target_rpm",
+            "target_node": "stall_guard",
+            "target_port": "current_target_rpm",
+            "data_type": "numeric"
           },
           {
-            "source_node": "log_row",
+            "source_node": "watcher",
+            "source_port": "table_data",
+            "target_node": "table_display",
+            "target_port": "value",
+            "data_type": "array"
+          },
+          {
+            "source_node": "watcher",
             "source_port": "table_data",
             "target_node": "csv_report",
             "target_port": "data",
             "data_type": "array"
           },
           {
-            "source_node": "arduino",
+            "source_node": "reader",
             "source_port": "rpm",
             "target_node": "rpm_display",
             "target_port": "value",
             "data_type": "numeric"
           },
           {
-            "source_node": "arduino",
-            "source_port": "pwm_actual",
+            "source_node": "reader",
+            "source_port": "pwm",
             "target_node": "pwm_display",
+            "target_port": "value",
+            "data_type": "numeric"
+          },
+          {
+            "source_node": "reader",
+            "source_port": "elapsed_time_s",
+            "target_node": "time_display_1",
+            "target_port": "value",
+            "data_type": "numeric"
+          },
+          {
+            "source_node": "reader",
+            "source_port": "elapsed_time_s",
+            "target_node": "time_display_2",
             "target_port": "value",
             "data_type": "numeric"
           },
@@ -966,13 +812,6 @@
             "data_type": "numeric"
           },
           {
-            "source_node": "density_delta",
-            "source_port": "delta_rho",
-            "target_node": "delta_display",
-            "target_port": "value",
-            "data_type": "numeric"
-          },
-          {
             "source_node": "ift",
             "source_port": "omega_squared",
             "target_node": "omega_display",
@@ -999,132 +838,6 @@
             "target_node": "ift_mn_display",
             "target_port": "value",
             "data_type": "numeric"
-          },
-          {
-            "source_node": "log_row",
-            "source_port": "table_data",
-            "target_node": "table_display",
-            "target_port": "value",
-            "data_type": "array"
-          },
-          {
-            "source_node": "motor",
-            "source_port": "out",
-            "target_node": "sequencer",
-            "target_port": "start",
-            "data_type": "boolean"
-          },
-          {
-            "source_node": "arduino",
-            "source_port": "rpm",
-            "target_node": "sequencer",
-            "target_port": "rpm_measured",
-            "data_type": "numeric"
-          },
-          {
-            "source_node": "arduino",
-            "source_port": "sensor_status",
-            "target_node": "sequencer",
-            "target_port": "sensor_status",
-            "data_type": "string"
-          },
-          {
-            "source_node": "arduino",
-            "source_port": "error",
-            "target_node": "sequencer",
-            "target_port": "motor_error",
-            "data_type": "error"
-          },
-          {
-            "source_node": "cam_err",
-            "source_port": "error",
-            "target_node": "sequencer",
-            "target_port": "capture_error",
-            "data_type": "error"
-          },
-          {
-            "source_node": "ift",
-            "source_port": "ift_mN_m",
-            "target_node": "sequencer",
-            "target_port": "ift_mN_m",
-            "data_type": "numeric"
-          },
-          {
-            "source_node": "oil_edge",
-            "source_port": "diameter_px",
-            "target_node": "sequencer",
-            "target_port": "diameter_px",
-            "data_type": "numeric"
-          },
-          {
-            "source_node": "drop_mm",
-            "source_port": "diameter_mm",
-            "target_node": "sequencer",
-            "target_port": "diameter_mm",
-            "data_type": "numeric"
-          },
-          {
-            "source_node": "density_delta",
-            "source_port": "delta_rho",
-            "target_node": "sequencer",
-            "target_port": "delta_rho",
-            "data_type": "numeric"
-          },
-          {
-            "source_node": "ift",
-            "source_port": "omega_squared",
-            "target_node": "sequencer",
-            "target_port": "omega_squared",
-            "data_type": "numeric"
-          },
-          {
-            "source_node": "ift",
-            "source_port": "radius_cubed",
-            "target_node": "sequencer",
-            "target_port": "radius_cubed",
-            "data_type": "numeric"
-          },
-          {
-            "source_node": "ift",
-            "source_port": "ift_N_m",
-            "target_node": "sequencer",
-            "target_port": "ift_N_m",
-            "data_type": "numeric"
-          },
-          {
-            "source_node": "sequencer",
-            "source_port": "target_pwm",
-            "target_node": "pwm_fb",
-            "target_port": "value",
-            "data_type": "numeric"
-          },
-          {
-            "source_node": "pwm_fb",
-            "source_port": "out",
-            "target_node": "arduino",
-            "target_port": "pwm",
-            "data_type": "variant"
-          },
-          {
-            "source_node": "sequencer",
-            "source_port": "state",
-            "target_node": "state_display",
-            "target_port": "value",
-            "data_type": "string"
-          },
-          {
-            "source_node": "sequencer",
-            "source_port": "countdown",
-            "target_node": "count_display",
-            "target_port": "value",
-            "data_type": "numeric"
-          },
-          {
-            "source_node": "sequencer",
-            "source_port": "table_data",
-            "target_node": "table_display",
-            "target_port": "value",
-            "data_type": "array"
           }
         ]
       },
@@ -1153,7 +866,17 @@
             "z_index": 0,
             "properties": {
               "label": "Motor",
-              "display_type": "radio_start_stop"
+              "display_type": "radio_start_stop",
+              "options": [
+                {
+                  "label": "STOP",
+                  "value": 0
+                },
+                {
+                  "label": "START",
+                  "value": 1
+                }
+              ]
             },
             "extensions": {}
           },
@@ -1172,7 +895,8 @@
               "label": "RPM ACT",
               "display_type": "gauge",
               "minimum": 0,
-              "maximum": 6000
+              "maximum": 6000,
+              "tick_interval": 500
             },
             "extensions": {}
           },
@@ -1191,7 +915,13 @@
               "label": "PWM ACT",
               "display_type": "gauge",
               "minimum": 0,
-              "maximum": 255
+              "maximum": 255,
+              "style": "half_circle",
+              "color_gradient": [
+                "#00b050",
+                "#ffff00",
+                "#ff0000"
+              ]
             },
             "extensions": {}
           },
@@ -1209,15 +939,7 @@
             "properties": {
               "label": "COM Arduino",
               "display_type": "dropdown",
-              "options": [
-                "COM1",
-                "COM2",
-                "COM3",
-                "COM4",
-                "COM5",
-                "/dev/ttyACM0",
-                "/dev/ttyUSB0"
-              ]
+              "options": []
             },
             "extensions": {}
           },
@@ -1233,41 +955,41 @@
             },
             "z_index": 4,
             "properties": {
-              "label": "WIFI IP / Camera URL"
+              "label": "WIFI IP"
             },
             "extensions": {}
           },
           {
-            "id": "fp-time-duration",
-            "kind": "numeric_control",
-            "terminal_node_id": "time_duration",
+            "id": "fp-time-1",
+            "kind": "indicator",
+            "terminal_node_id": "time_display_1",
             "bounds": {
               "x": 1410,
               "y": 20,
               "width": 170,
-              "height": 90
+              "height": 65
             },
             "z_index": 5,
             "properties": {
-              "label": "TIME(s) Duration",
-              "assumption": "Unconfirmed original VI function"
+              "label": "TIME(s)",
+              "internal_role": "elapsed time since last TARGET_RPM change"
             },
             "extensions": {}
           },
           {
-            "id": "fp-time-interval",
-            "kind": "numeric_control",
-            "terminal_node_id": "time_interval",
+            "id": "fp-time-2",
+            "kind": "indicator",
+            "terminal_node_id": "time_display_2",
             "bounds": {
               "x": 1410,
-              "y": 120,
+              "y": 95,
               "width": 170,
-              "height": 90
+              "height": 65
             },
             "z_index": 6,
             "properties": {
-              "label": "TIME(s) Interval",
-              "assumption": "Unconfirmed original VI function"
+              "label": "TIME(s)",
+              "internal_role": "reserve duplicate of the elapsed display"
             },
             "extensions": {}
           },
@@ -1277,7 +999,7 @@
             "terminal_node_id": "oil_picture",
             "bounds": {
               "x": 20,
-              "y": 140,
+              "y": 200,
               "width": 430,
               "height": 250
             },
@@ -1288,18 +1010,166 @@
             "extensions": {}
           },
           {
+            "id": "fp-oil-px",
+            "kind": "indicator",
+            "terminal_node_id": "oil_px_display",
+            "bounds": {
+              "x": 20,
+              "y": 460,
+              "width": 205,
+              "height": 70
+            },
+            "z_index": 8,
+            "properties": {
+              "label": "Diameter (px)"
+            },
+            "extensions": {}
+          },
+          {
+            "id": "fp-oil-mm",
+            "kind": "indicator",
+            "terminal_node_id": "oil_mm_display",
+            "bounds": {
+              "x": 245,
+              "y": 460,
+              "width": 205,
+              "height": 70
+            },
+            "z_index": 9,
+            "properties": {
+              "label": "Diameter (mm)"
+            },
+            "extensions": {}
+          },
+          {
+            "id": "fp-density",
+            "kind": "numeric_control",
+            "terminal_node_id": "density_input",
+            "bounds": {
+              "x": 20,
+              "y": 550,
+              "width": 430,
+              "height": 80
+            },
+            "z_index": 10,
+            "properties": {
+              "label": "Selisih Densitas (Kg/m3)",
+              "editor": "spinbox"
+            },
+            "extensions": {}
+          },
+          {
             "id": "fp-wire-picture",
             "kind": "image_indicator",
             "terminal_node_id": "wire_picture",
             "bounds": {
               "x": 470,
-              "y": 140,
+              "y": 200,
               "width": 430,
               "height": 250
             },
-            "z_index": 8,
+            "z_index": 11,
             "properties": {
-              "label": "Picture Comparison — Known Wire"
+              "label": "Picture Comparison"
+            },
+            "extensions": {}
+          },
+          {
+            "id": "fp-wire-px",
+            "kind": "indicator",
+            "terminal_node_id": "wire_px_display",
+            "bounds": {
+              "x": 470,
+              "y": 460,
+              "width": 205,
+              "height": 70
+            },
+            "z_index": 12,
+            "properties": {
+              "label": "Diameter (px)"
+            },
+            "extensions": {}
+          },
+          {
+            "id": "fp-scale",
+            "kind": "indicator",
+            "terminal_node_id": "scale_display",
+            "bounds": {
+              "x": 695,
+              "y": 460,
+              "width": 205,
+              "height": 70
+            },
+            "z_index": 13,
+            "properties": {
+              "label": "Scale factor (mm/pixel)"
+            },
+            "extensions": {}
+          },
+          {
+            "id": "fp-omega",
+            "kind": "indicator",
+            "terminal_node_id": "omega_display",
+            "bounds": {
+              "x": 920,
+              "y": 460,
+              "width": 150,
+              "height": 70
+            },
+            "z_index": 14,
+            "properties": {
+              "label": "w²",
+              "format": "0.000E+0"
+            },
+            "extensions": {}
+          },
+          {
+            "id": "fp-radius",
+            "kind": "indicator",
+            "terminal_node_id": "radius_display",
+            "bounds": {
+              "x": 1080,
+              "y": 460,
+              "width": 150,
+              "height": 70
+            },
+            "z_index": 15,
+            "properties": {
+              "label": "r³",
+              "format": "0.000E+0"
+            },
+            "extensions": {}
+          },
+          {
+            "id": "fp-ift-n",
+            "kind": "indicator",
+            "terminal_node_id": "ift_n_display",
+            "bounds": {
+              "x": 1240,
+              "y": 460,
+              "width": 160,
+              "height": 70
+            },
+            "z_index": 16,
+            "properties": {
+              "label": "IFT N/m",
+              "format": "0.0000000"
+            },
+            "extensions": {}
+          },
+          {
+            "id": "fp-ift-mn",
+            "kind": "indicator",
+            "terminal_node_id": "ift_mn_display",
+            "bounds": {
+              "x": 1410,
+              "y": 460,
+              "width": 170,
+              "height": 70
+            },
+            "z_index": 17,
+            "properties": {
+              "label": "IFT mN/m"
             },
             "extensions": {}
           },
@@ -1313,11 +1183,16 @@
               "width": 320,
               "height": 250
             },
-            "z_index": 9,
+            "z_index": 18,
             "properties": {
               "label": "Grafik Oil",
               "x_label": "Baris Pixel",
-              "y_label": "Intensitas (Threshold)"
+              "y_label": "Intensitas (Thresold)",
+              "x_min": 0,
+              "x_max": 500,
+              "y_min": 0,
+              "y_max": 300,
+              "plot_selector": "Plot 0"
             },
             "extensions": {}
           },
@@ -1327,350 +1202,20 @@
             "terminal_node_id": "wire_chart",
             "bounds": {
               "x": 1260,
-              "y": 230,
+              "y": 140,
               "width": 320,
               "height": 250
             },
-            "z_index": 10,
+            "z_index": 19,
             "properties": {
               "label": "Grafik Kawat",
               "x_label": "Baris Pixel",
-              "y_label": "Intensitas (Threshold)"
-            },
-            "extensions": {}
-          },
-          {
-            "id": "fp-oil-px",
-            "kind": "indicator",
-            "terminal_node_id": "oil_px_display",
-            "bounds": {
-              "x": 20,
-              "y": 400,
-              "width": 205,
-              "height": 70
-            },
-            "z_index": 11,
-            "properties": {
-              "label": "Diameter Oil (px)"
-            },
-            "extensions": {}
-          },
-          {
-            "id": "fp-oil-mm",
-            "kind": "indicator",
-            "terminal_node_id": "oil_mm_display",
-            "bounds": {
-              "x": 245,
-              "y": 400,
-              "width": 205,
-              "height": 70
-            },
-            "z_index": 12,
-            "properties": {
-              "label": "Diameter Oil (mm)"
-            },
-            "extensions": {}
-          },
-          {
-            "id": "fp-wire-px",
-            "kind": "indicator",
-            "terminal_node_id": "wire_px_display",
-            "bounds": {
-              "x": 470,
-              "y": 400,
-              "width": 205,
-              "height": 70
-            },
-            "z_index": 13,
-            "properties": {
-              "label": "Diameter Wire (px)"
-            },
-            "extensions": {}
-          },
-          {
-            "id": "fp-scale",
-            "kind": "indicator",
-            "terminal_node_id": "scale_display",
-            "bounds": {
-              "x": 695,
-              "y": 400,
-              "width": 205,
-              "height": 70
-            },
-            "z_index": 14,
-            "properties": {
-              "label": "Scale factor (mm/pixel)"
-            },
-            "extensions": {}
-          },
-          {
-            "id": "fp-wire-known",
-            "kind": "numeric_control",
-            "terminal_node_id": "wire_known",
-            "bounds": {
-              "x": 920,
-              "y": 400,
-              "width": 320,
-              "height": 70
-            },
-            "z_index": 15,
-            "properties": {
-              "label": "Known Wire Diameter (mm) — manual micrometer"
-            },
-            "extensions": {}
-          },
-          {
-            "id": "fp-oil-mode",
-            "kind": "string_control",
-            "terminal_node_id": "oil_mode",
-            "bounds": {
-              "x": 20,
-              "y": 490,
-              "width": 205,
-              "height": 65
-            },
-            "z_index": 16,
-            "properties": {
-              "label": "Camera Mode",
-              "display_type": "dropdown",
-              "options": [
-                "usb",
-                "network"
-              ]
-            },
-            "extensions": {}
-          },
-          {
-            "id": "fp-oil-source",
-            "kind": "numeric_control",
-            "terminal_node_id": "oil_source",
-            "bounds": {
-              "x": 245,
-              "y": 490,
-              "width": 205,
-              "height": 65
-            },
-            "z_index": 17,
-            "properties": {
-              "label": "USB Device Index"
-            },
-            "extensions": {}
-          },
-          {
-            "id": "fp-oil-orientation",
-            "kind": "string_control",
-            "terminal_node_id": "oil_orientation",
-            "bounds": {
-              "x": 470,
-              "y": 490,
-              "width": 205,
-              "height": 65
-            },
-            "z_index": 19,
-            "properties": {
-              "label": "Oil Scan",
-              "display_type": "dropdown",
-              "options": [
-                "horizontal",
-                "vertical"
-              ]
-            },
-            "extensions": {}
-          },
-          {
-            "id": "fp-wire-orientation",
-            "kind": "string_control",
-            "terminal_node_id": "wire_orientation",
-            "bounds": {
-              "x": 920,
-              "y": 490,
-              "width": 320,
-              "height": 65
-            },
-            "z_index": 20,
-            "properties": {
-              "label": "Wire Scan",
-              "display_type": "dropdown",
-              "options": [
-                "horizontal",
-                "vertical"
-              ]
-            },
-            "extensions": {}
-          },
-          {
-            "id": "fp-outer-empty",
-            "kind": "numeric_control",
-            "terminal_node_id": "outer_empty",
-            "bounds": {
-              "x": 20,
-              "y": 580,
-              "width": 205,
-              "height": 65
-            },
-            "z_index": 21,
-            "properties": {
-              "label": "Outer Empty (g)"
-            },
-            "extensions": {}
-          },
-          {
-            "id": "fp-outer-gross",
-            "kind": "numeric_control",
-            "terminal_node_id": "outer_gross",
-            "bounds": {
-              "x": 245,
-              "y": 580,
-              "width": 205,
-              "height": 65
-            },
-            "z_index": 22,
-            "properties": {
-              "label": "Outer Gross (g)"
-            },
-            "extensions": {}
-          },
-          {
-            "id": "fp-outer-volume",
-            "kind": "numeric_control",
-            "terminal_node_id": "outer_volume",
-            "bounds": {
-              "x": 470,
-              "y": 580,
-              "width": 205,
-              "height": 65
-            },
-            "z_index": 23,
-            "properties": {
-              "label": "Outer Volume (mL)"
-            },
-            "extensions": {}
-          },
-          {
-            "id": "fp-drop-empty",
-            "kind": "numeric_control",
-            "terminal_node_id": "drop_empty",
-            "bounds": {
-              "x": 20,
-              "y": 655,
-              "width": 205,
-              "height": 65
-            },
-            "z_index": 24,
-            "properties": {
-              "label": "Drop Empty (g)"
-            },
-            "extensions": {}
-          },
-          {
-            "id": "fp-drop-gross",
-            "kind": "numeric_control",
-            "terminal_node_id": "drop_gross",
-            "bounds": {
-              "x": 245,
-              "y": 655,
-              "width": 205,
-              "height": 65
-            },
-            "z_index": 25,
-            "properties": {
-              "label": "Drop Gross (g)"
-            },
-            "extensions": {}
-          },
-          {
-            "id": "fp-drop-volume",
-            "kind": "numeric_control",
-            "terminal_node_id": "drop_volume",
-            "bounds": {
-              "x": 470,
-              "y": 655,
-              "width": 205,
-              "height": 65
-            },
-            "z_index": 26,
-            "properties": {
-              "label": "Drop Volume (mL)"
-            },
-            "extensions": {}
-          },
-          {
-            "id": "fp-delta",
-            "kind": "indicator",
-            "terminal_node_id": "delta_display",
-            "bounds": {
-              "x": 695,
-              "y": 580,
-              "width": 320,
-              "height": 140
-            },
-            "z_index": 27,
-            "properties": {
-              "label": "Selisih Densitas (kg/m3)"
-            },
-            "extensions": {}
-          },
-          {
-            "id": "fp-omega",
-            "kind": "indicator",
-            "terminal_node_id": "omega_display",
-            "bounds": {
-              "x": 1035,
-              "y": 580,
-              "width": 255,
-              "height": 65
-            },
-            "z_index": 28,
-            "properties": {
-              "label": "w²"
-            },
-            "extensions": {}
-          },
-          {
-            "id": "fp-radius",
-            "kind": "indicator",
-            "terminal_node_id": "radius_display",
-            "bounds": {
-              "x": 1305,
-              "y": 580,
-              "width": 255,
-              "height": 65
-            },
-            "z_index": 29,
-            "properties": {
-              "label": "r³"
-            },
-            "extensions": {}
-          },
-          {
-            "id": "fp-ift-n",
-            "kind": "indicator",
-            "terminal_node_id": "ift_n_display",
-            "bounds": {
-              "x": 1035,
-              "y": 655,
-              "width": 255,
-              "height": 65
-            },
-            "z_index": 30,
-            "properties": {
-              "label": "IFT N/m"
-            },
-            "extensions": {}
-          },
-          {
-            "id": "fp-ift-mn",
-            "kind": "indicator",
-            "terminal_node_id": "ift_mn_display",
-            "bounds": {
-              "x": 1305,
-              "y": 655,
-              "width": 255,
-              "height": 65
-            },
-            "z_index": 31,
-            "properties": {
-              "label": "IFT mN/m"
+              "y_label": "Intensitas (Thresold)",
+              "x_min": 0,
+              "x_max": 500,
+              "y_min": 0,
+              "y_max": 250,
+              "plot_selector": "Plot 0"
             },
             "extensions": {}
           },
@@ -1680,56 +1225,49 @@
             "terminal_node_id": "table_display",
             "bounds": {
               "x": 20,
-              "y": 750,
+              "y": 650,
               "width": 1540,
               "height": 220
             },
-            "z_index": 32,
+            "z_index": 20,
             "properties": {
-              "label": "RPM | Dia(px) | Dia(mm) | kg/m3 | w² | r³ | IFT N/m | IFT mN/m",
-              "display_type": "table"
+              "label": "RPM | Dia (px) | Dia (mm) | kg/m3 | w² | r³ | IFT N/m | IFT mN/m",
+              "display_type": "table",
+              "background": "#ffff99",
+              "visible_rows": 6,
+              "horizontal_scrollbar": true
             },
             "extensions": {}
           },
           {
-            "id": "fp-seq-state",
-            "kind": "indicator",
-            "terminal_node_id": "state_display",
+            "id": "fp-global-stop",
+            "kind": "boolean_control",
+            "terminal_node_id": "global_stop",
             "bounds": {
-              "x": 1410,
-              "y": 220,
-              "width": 170,
-              "height": 65
+              "x": 20,
+              "y": 890,
+              "width": 120,
+              "height": 80
             },
-            "z_index": 33,
+            "z_index": 21,
             "properties": {
-              "label": "Sequencer State"
+              "label": "STOP",
+              "display_type": "push_button",
+              "color": "#ff0000"
             },
-            "extensions": {}
-          },
-          {
-            "id": "fp-seq-count",
-            "kind": "indicator",
-            "terminal_node_id": "count_display",
-            "bounds": {
-              "x": 1410,
-              "y": 300,
-              "width": 170,
-              "height": 65
-            },
-            "z_index": 34,
-            "properties": {
-              "label": "Stage Countdown (s)"
-            },
-            "extensions": {}
+            "extensions": {
+              "role": "global_abort",
+              "binding_status": "visual parity only; RunController abort binding not implemented"
+            }
           }
         ],
         "extensions": {
-          "hardware_basis": "TZ20002MG, 60W 12V 5A DC motor, BTS7960 HW-039, Arduino Uno clone, installed optical/IR pulse sensor",
-          "serial_protocol_status": "Assumed SET_PWM/ACK_PWM/RPM text protocol pending original block-diagram confirmation",
-          "time_fields_status": "Assumed measurement duration and sampling interval pending original block-diagram confirmation",
-          "physical_validation": "not performed",
-          "sequencer_status": "6-stage RPM sequence implemented; automated fast-forwarded timer tests only, physical 18-minute cycle validation not performed"
+          "hardware_basis": "TZ20002MG, 60W 12V 5A DC motor, BTS7960 HW-039, Arduino Uno clone, optical/IR pulse sensor disc (4 holes/rev)",
+          "serial_protocol_status": "Ground truth from lab Arduino firmware source (found on lab PC, 2026-08-21): PC sends START/STOP text commands; firmware replies ACK:START, ACK:STOP, ACK:AUTOSTOP_6000; streams RPM:<int>;PWM:<int>;TIME:<float>;TARGET:<int> every ~100ms and TARGET_RPM:<int> once per stage change. RPM is computed by the firmware (4 holes/revolution); the PC never computes RPM from raw pulses.",
+          "architecture_status": "The 6-stage RPM sequence (1000..6000, 3 min per stage, autostop after 3 min at 6000 RPM) runs entirely in the Arduino firmware. PyLabView Studio is a passive event listener: spinning_drop_stage_watcher appends one table row per firmware stage-completion event (5x TARGET_RPM + 1x ACK:AUTOSTOP_6000) and never times anything itself.",
+          "time_fields_status": "TIME(s) displays show the firmware telemetry field TIME (seconds since the last TARGET_RPM change); the second display is a reserved duplicate.",
+          "stop_button_binding": "The red STOP button mirrors the original front panel visually; binding it to the application-level RunController abort is not implemented yet.",
+          "physical_validation": "not performed"
         }
       },
       "subdiagrams": {}

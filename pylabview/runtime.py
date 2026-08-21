@@ -426,7 +426,7 @@ _WAIT_NODE_TYPES = {
     "tcp_connect", "tcp_read", "udp_receive", "modbus_connect", "modbus_read_holding",
     "modbus_read_coils", "modbus_read_discrete", "modbus_read_input", "serial_open", "serial_read",
     "visa_open", "visa_query", "visa_read_raw", "opcua_connect", "opcua_read", "camera_capture",
-    "arduino_motor_rpm", "camera_capture_dual_mode",
+    "arduino_telemetry_reader", "camera_capture_dual_mode",
     "subvi", "visual_case", "visual_for",
 }
 

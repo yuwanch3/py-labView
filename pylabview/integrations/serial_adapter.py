@@ -16,11 +16,43 @@ class SerialConnection:
         if close_command is not None and (not isinstance(close_command, bytes) or not close_command):
             raise ValueError("serial close command must be non-empty bytes")
         self.stream, self.close_command, self._closed, self._lock = stream, close_command, False, RLock()
+        self._rx_buffer = bytearray()
 
     def read(self, size: int) -> Any:
         with self._lock:
             if self._closed: raise RuntimeError("serial connection is closed")
             return self.stream.read(size)
+
+    def read_incoming(self, max_lines: int, max_bytes: int) -> list[bytes]:
+        """Drain complete newline-terminated lines currently available.
+
+        Built for firmware that streams telemetry unsolicited (~100ms cadence):
+        this is not a request-response exchange. Returns only COMPLETE lines
+        (bytes including the trailing newline); a trailing partial chunk stays
+        buffered until its newline arrives on a later call. Garbage lines are
+        returned verbatim — tolerating them is the parser's job.
+        """
+        max_lines, max_bytes = int(max_lines), int(max_bytes)
+        if max_lines < 1 or max_lines > 256 or max_bytes < 16 or max_bytes > 65536:
+            raise ValueError("serial read bounds are invalid")
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("serial connection is closed")
+            lines: list[bytes] = []
+            while len(lines) < max_lines:
+                raw = self.stream.readline(max_bytes + 1)
+                if not raw:
+                    break
+                if not isinstance(raw, (bytes, bytearray)):
+                    raise TypeError("serial response must be bytes")
+                self._rx_buffer.extend(raw)
+                if len(self._rx_buffer) > max_bytes:
+                    raise ValueError("serial receive buffer exceeds configured bound")
+                while b"\n" in self._rx_buffer and len(lines) < max_lines:
+                    line, _, rest = bytes(self._rx_buffer).partition(b"\n")
+                    lines.append(line + b"\n")
+                    self._rx_buffer = bytearray(rest)
+            return lines
 
     def write(self, data: bytes) -> Any:
         with self._lock:
