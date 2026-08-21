@@ -196,3 +196,51 @@ def spinning_drop_log_row(context: HandlerContext):
     rows.append(values)
     del rows[:-maximum]
     return [headers, *rows]
+
+
+@registry.register("spinning_drop_sequencer")
+def spinning_drop_sequencer(context: HandlerContext):
+    state_key = f"sd-seq:{context.node.id}"
+    state = context.session.state.setdefault(state_key, {
+        "s": "IDLE", "idx": 0, "start": 0.0, "rows": [], "pwm": 0.0
+    })
+    
+    start = context.inputs["start"]
+    rpm_list = context.node.properties.get("rpm_list", [1000, 2000, 3000, 4000, 5000, 6000])
+    dur = float(context.node.properties.get("stage_duration", 180.0))
+    
+    if not start and state["s"] != "IDLE":
+        state.update({"s": "IDLE", "idx": 0, "rows": []})
+        return {"target_pwm": 0.0, "trigger_capture": False, "state": "IDLE", "countdown": 0.0, "table_data": [], "error": ErrorCluster()}
+    
+    if start and state["s"] == "IDLE":
+        state.update({"s": "RUNNING", "idx": 0, "start": context.runtime.clock(), "rows": []})
+    
+    if state["s"] == "RUNNING":
+        if context.inputs["sensor_status"] != "OK" or context.inputs["motor_error"].status or context.inputs["capture_error"].status:
+            state["s"] = "ERROR"
+            return {"target_pwm": 0.0, "trigger_capture": False, "state": "ERROR", "countdown": 0.0, "table_data": [], 
+                    "error": ErrorCluster(True, 62, "Hardware error: sequencer halted")}
+
+        now = context.runtime.clock()
+        elapsed = now - state["start"]
+        target_rpm = rpm_list[state["idx"]]
+        target_pwm = target_rpm * 255.0 / 6000.0
+        
+        if elapsed >= dur:
+            ports = ("rpm_measured", "diameter_px", "diameter_mm", "delta_rho", "omega_squared", "radius_cubed", "ift_N_m", "ift_mN_m")
+            state["rows"].append([float(context.inputs[p]) for p in ports])
+            
+            if state["idx"] < len(rpm_list) - 1:
+                state.update({"idx": state["idx"] + 1, "start": now})
+                return {"target_pwm": target_pwm, "trigger_capture": True, "state": f"STAGE_{state['idx']}", "countdown": dur, "table_data": state["rows"], "error": ErrorCluster()}
+            else:
+                state["s"] = "AWAITING_STOP"
+                return {"target_pwm": 0.0, "trigger_capture": True, "state": "AWAITING_STOP", "countdown": 0.0, "table_data": state["rows"], "error": ErrorCluster()}
+        
+        return {"target_pwm": target_pwm, "trigger_capture": False, "state": f"STAGE_{state['idx']}", "countdown": max(0.0, dur - elapsed), "table_data": state["rows"], "error": ErrorCluster()}
+
+    if state["s"] == "AWAITING_STOP":
+        return {"target_pwm": 0.0, "trigger_capture": False, "state": "AWAITING_STOP", "countdown": 0.0, "table_data": state["rows"], "error": ErrorCluster()}
+        
+    return {"target_pwm": 0.0, "trigger_capture": False, "state": state["s"], "countdown": 0.0, "table_data": state["rows"], "error": ErrorCluster()}

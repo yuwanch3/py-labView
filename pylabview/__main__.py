@@ -22,7 +22,7 @@ def self_test(include_isolation: bool = True) -> int:
     source.properties["value"] = 3
     restored = Project.from_dict(project.to_dict())
     result = DataflowRuntime().run_project(restored)
-    if __version__ != "4.1.0" or result.errors or result.values[source.id] != 3:
+    if __version__ != "4.2.0" or result.errors or result.values[source.id] != 3:
         raise RuntimeError("core model/runtime self-test failed")
     if "add" not in DEFAULT_PLUGIN_REGISTRY.node_definitions:
         raise RuntimeError("builtin plugin registry self-test failed")
