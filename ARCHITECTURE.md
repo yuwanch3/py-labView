@@ -5,7 +5,7 @@
 - `model.py`, `typesystem.py`, `persistence.py`: strict schema v3, graph types, and atomic project persistence.
 - `execution.py`, `resources.py`, `runtime.py`: desktop CPython dataflow scheduler, cooperative cancellation, and session-owned handles.
 - `handlers/`: typed `HandlerContext`, `NodeHandler` protocol, duplicate-safe registry, and category modules for all built-in node behavior. `DataflowRuntime._evaluate` resolves one handler and invokes it; it does not dispatch on node type.
-- `handlers/spinning_drop.py`: domain handlers for passive Arduino telemetry listening (START/STOP commands, ACK handling, `RPM:;PWM:;TIME:;TARGET:` telemetry and `TARGET_RPM:` stage events parsed tolerantly from one stream), a PC-side RPM stall watchdog, event-driven stage-watcher table building, wire calibration, radius-form Vonnegut IFT, and pycnometer/delta-density calculators. All RPM sequencing timing belongs to the Arduino firmware (ground truth from lab source, 2026-08-21); the PC never sends PWM values. Error clusters are explicit wires; invalid measurements cannot reach report generation.
+- `handlers/spinning_drop.py`: domain handlers for passive Arduino telemetry listening (START/STOP commands, ACK handling, `RPM:;PWM:;TIME:;TARGET:` telemetry and `TARGET_RPM:` stage events parsed tolerantly from one stream), a PC-side RPM stall watchdog, event-driven stage-watcher table building, wire calibration, radius-form Vonnegut IFT, and pycnometer/delta-density calculators. All RPM sequencing timing belongs to the Arduino firmware (ground truth from lab source, 2026-08-21); the PC never sends PWM values. `camera_capture_dual_mode` is trigger-held per node: the oil node captures live while a staged wire-comparison node only re-captures on its operator button, holding its last frame otherwise so the two pictures are distinct events. Error clusters are explicit wires; invalid measurements cannot reach report generation.
 - `protocols.py`: bounded stdlib TCP/UDP and Modbus TCP FC01/02/03/04/05/06/15/16; pyserial loader remains compatibility API.
 - `integrations/`: optional capability/diagnostic, NI-DAQmx, VISA, OPC UA, vision, report, and plugin process adapters. Constructors accept backend injection and do not import optional packages at core startup.
 - `hdl.py`: validated combinational graph-to-Verilog subset and optional bounded Yosys syntax subprocess.
@@ -33,4 +33,4 @@ Built-in definitions must have an explicit registered handler. A type absent fro
 
 ## Persistence
 
-Application release 4.3.3 deliberately keeps project schema version 3. New behavior is represented by node type/properties and root/panel extension points, so no v3-to-v4 data migration is necessary.
+Application release 4.3.4 deliberately keeps project schema version 3. New behavior is represented by node type/properties and root/panel extension points, so no v3-to-v4 data migration is necessary.

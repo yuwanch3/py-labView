@@ -374,6 +374,8 @@ class StudioApp(tk.Tk):
         self.checkpoint()
         node.label = new_label
         node.properties.update(parsed)
+        if self.front_panel and "value" in parsed:
+            self.front_panel.sync_control_value_from_model(node_id, node.properties["value"])
         self.changed()
         self.canvas.redraw()
         self.status_var.set(f"Updated {node.label}")

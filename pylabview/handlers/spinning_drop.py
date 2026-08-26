@@ -222,12 +222,24 @@ def spinning_drop_stage_watcher(context: HandlerContext):
 
 @registry.register("camera_capture_dual_mode")
 def camera_capture_dual_mode(context: HandlerContext):
-    context.session.token.check()
-    image = context.runtime.vision.capture_source(
-        context.inputs["mode"], context.inputs["device_index"], context.inputs["network_url"],
-        context.inputs["timeout_seconds"])
-    context.session.token.check()
-    return image
+    """Capture source, decoupled per node so each camera is a distinct event.
+
+    The oil and wire-comparison captures are separate trigger domains. A live
+    node (capture_trigger held True) re-grabs the stream every tick; a staged
+    wire node (capture_trigger False until the operator initiates) instead
+    re-emits its last held frame and never silently re-grabs next to the oil
+    node. Without this, the comparison capture fired in the same instant from
+    the same source and returned an identical frame.
+    """
+    key = f"camera:{context.caller_vi or 'graph'}:{context.graph_scope}:{context.node.id}"
+    state = context.session.state.setdefault(key, {"frame": None})
+    if bool(context.inputs["capture_trigger"]):
+        frame = context.runtime.vision.capture_source(
+            context.inputs["mode"], context.inputs["device_index"],
+            context.inputs["network_url"], context.inputs["timeout_seconds"])
+        if frame is not None:
+            state["frame"] = frame
+    return state["frame"]
 
 
 @registry.register("edge_intensity_profile")
