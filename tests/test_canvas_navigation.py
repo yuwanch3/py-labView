@@ -33,6 +33,7 @@ class _ViewportFake:
         self.x_moves: list[float] = []
         self.y_moves: list[float] = []
         self.scrolls: list[tuple[int, str]] = []
+        self.vertical_scrolls: list[tuple[int, str]] = []
         self.redraw_count = 0
         self.panel = {"canvas": {"width": 2400, "height": 1600}}
 
@@ -62,6 +63,9 @@ class _ViewportFake:
 
     def xview_scroll(self, direction: int, units: str) -> None:
         self.scrolls.append((direction, units))
+
+    def yview_scroll(self, direction: int, units: str) -> None:
+        self.vertical_scrolls.append((direction, units))
 
 
 class CanvasNavigationTests(unittest.TestCase):
@@ -107,6 +111,14 @@ class CanvasNavigationTests(unittest.TestCase):
                 self.assertEqual(canvas_type._scroll_horizontal(canvas, 1), "break")
                 self.assertEqual(canvas.scrolls, [(-1, "units"), (1, "units")])
 
+    def test_plain_wheel_scrolls_vertically_on_both_canvases(self) -> None:
+        for canvas_type in (DiagramCanvas, PanelDesigner):
+            with self.subTest(canvas=canvas_type.__name__):
+                canvas = _ViewportFake()
+                self.assertEqual(canvas_type._scroll_vertical(canvas, -1), "break")
+                self.assertEqual(canvas_type._scroll_vertical(canvas, 1), "break")
+                self.assertEqual(canvas.vertical_scrolls, [(-1, "units"), (1, "units")])
+
     def test_wheel_direction_matches_common_desktop_convention(self) -> None:
         class WheelFake(_ViewportFake):
             def _set_zoom(self, factor: float, x: int, y: int) -> str:
@@ -115,6 +127,10 @@ class CanvasNavigationTests(unittest.TestCase):
 
             def _scroll_horizontal(self, direction: int) -> str:
                 self.horizontal_request = direction
+                return "break"
+
+            def _scroll_vertical(self, direction: int) -> str:
+                self.vertical_request = direction
                 return "break"
 
         event_up = SimpleNamespace(delta=120, x=40, y=50)
@@ -130,6 +146,10 @@ class CanvasNavigationTests(unittest.TestCase):
                 self.assertEqual(canvas.horizontal_request, -1)
                 canvas_type._horizontal_wheel(canvas, event_down)
                 self.assertEqual(canvas.horizontal_request, 1)
+                canvas_type._vertical_wheel(canvas, event_up)
+                self.assertEqual(canvas.vertical_request, -1)
+                canvas_type._vertical_wheel(canvas, event_down)
+                self.assertEqual(canvas.vertical_request, 1)
 
 
 if __name__ == "__main__":
