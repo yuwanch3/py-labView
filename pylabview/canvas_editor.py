@@ -49,6 +49,9 @@ class DiagramCanvas(tk.Canvas):
         self.bind("<Shift-MouseWheel>", self._horizontal_wheel)
         self.bind("<Shift-Button-4>", lambda _event: self._scroll_horizontal(-1))
         self.bind("<Shift-Button-5>", lambda _event: self._scroll_horizontal(1))
+        self.bind("<MouseWheel>", self._vertical_wheel)
+        self.bind("<Button-4>", lambda _event: self._scroll_vertical(-1))
+        self.bind("<Button-5>", lambda _event: self._scroll_vertical(1))
         self.bind("<Configure>", lambda _event: self.redraw())
         self.redraw()
 
@@ -233,4 +236,11 @@ class DiagramCanvas(tk.Canvas):
 
     def _scroll_horizontal(self, direction: int) -> str:
         self.xview_scroll(direction, "units")
+        return "break"
+
+    def _vertical_wheel(self, event: tk.Event) -> str:
+        return self._scroll_vertical(-1 if event.delta > 0 else 1)
+
+    def _scroll_vertical(self, direction: int) -> str:
+        self.yview_scroll(direction, "units")
         return "break"

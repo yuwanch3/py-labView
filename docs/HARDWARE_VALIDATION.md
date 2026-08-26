@@ -15,7 +15,7 @@
 | External RT target | Handshake contract only | Fake socket | No qualified target |
 | Spinning-drop IFT tensiometer prototype (Arduino/BTS7960, RPM pulse sensor, dual-mode camera) | Modelled/implemented for automated evaluation | Injected serial/OpenCV backends, firmware-protocol parsing (telemetry/ACK/TARGET_RPM), event-driven stage watcher, PC-side RPM stall watchdog, image-profile and Vonnegut tests | **Not performed** |
 
-PyLabView Studio 4.3.2 is not safety-rated, medically certified, hard real-time, or qualified for control of hazardous processes. Users must perform device-specific installation, calibration, electrical protection, fault handling, cybersecurity, and acceptance testing.
+PyLabView Studio 4.3.3 is not safety-rated, medically certified, hard real-time, or qualified for control of hazardous processes. Users must perform device-specific installation, calibration, electrical protection, fault handling, cybersecurity, and acceptance testing.
 
 The handler-registry, parser, and UI decomposition is an internal refactor. It adds no physical hardware evidence and does not change any physical-validation outcome above.
 

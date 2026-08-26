@@ -2,6 +2,16 @@
 
 All notable user-facing changes to PyLabView Studio are recorded here.
 
+## [4.3.3] - 2026-08-26
+
+### Added
+
+- Plain mouse-wheel vertical scrolling for both Front Panel and Block Diagram canvases, with native wheel handling on Windows/macOS and Button-4/Button-5 handling on Linux/X11.
+
+### Compatibility
+
+- `Ctrl + mouse wheel` remains zoom and `Shift + mouse wheel` remains horizontal scrolling. No project data or schema behavior changed.
+
 ## [4.3.2] - 2026-08-26
 
 ### Added
@@ -20,4 +30,5 @@ All notable user-facing changes to PyLabView Studio are recorded here.
 
 - Project schema remains version 3. Zoom and scroll position are UI-only state and do not modify or dirty persisted node or Front Panel coordinates.
 
+[4.3.3]: https://github.com/yuwanch3/py-labView/releases/tag/v4.3.3
 [4.3.2]: https://github.com/yuwanch3/py-labView/releases/tag/v4.3.2
