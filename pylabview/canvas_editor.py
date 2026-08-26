@@ -46,6 +46,9 @@ class DiagramCanvas(tk.Canvas):
         self.bind("<Control-MouseWheel>", self._zoom_wheel)
         self.bind("<Control-Button-4>", lambda event: self._set_zoom(1.1, event.x, event.y))
         self.bind("<Control-Button-5>", lambda event: self._set_zoom(0.9, event.x, event.y))
+        self.bind("<Shift-MouseWheel>", self._horizontal_wheel)
+        self.bind("<Shift-Button-4>", lambda _event: self._scroll_horizontal(-1))
+        self.bind("<Shift-Button-5>", lambda _event: self._scroll_horizontal(1))
         self.bind("<Configure>", lambda _event: self.redraw())
         self.redraw()
 
@@ -73,8 +76,11 @@ class DiagramCanvas(tk.Canvas):
 
     def redraw(self) -> None:
         self.delete("all")
-        width = max(self.winfo_width(), 800)
-        height = max(self.winfo_height(), 600)
+        graph_width = max((node.x + NODE_WIDTH for node in self.graph.nodes.values()), default=0) + 160
+        graph_height = max((node.y + self._node_height(node.id) for node in self.graph.nodes.values()), default=0) + 160
+        width = max(self.winfo_width(), int(max(800, graph_width) * self.zoom))
+        height = max(self.winfo_height(), int(max(600, graph_height) * self.zoom))
+        self.configure(scrollregion=(0, 0, width, height))
         spacing = max(12, int(24 * self.zoom))
         for x in range(0, width, spacing):
             self.create_line(x, 0, x, height, fill="#202734", tags="grid")
@@ -135,7 +141,8 @@ class DiagramCanvas(tk.Canvas):
 
     def _press(self, event: tk.Event) -> None:
         self.focus_set()
-        tags = self._tags_at(event.x, event.y)
+        canvas_x, canvas_y = self.canvasx(event.x), self.canvasy(event.y)
+        tags = self._tags_at(canvas_x, canvas_y)
         port_tag = next((tag for tag in tags if tag.startswith("port:")), None)
         if port_tag:
             _, direction, node_id, port = port_tag.split(":", 3)
@@ -156,7 +163,7 @@ class DiagramCanvas(tk.Canvas):
             self.selected_node = node_tag.split(":", 1)[1]
             self.selected_wire = None
             node = self.graph.nodes[self.selected_node]
-            self.drag_origin = (event.x, event.y)
+            self.drag_origin = (canvas_x, canvas_y)
             self.drag_node_origin = (node.x, node.y)
             self.drag_snapshot_taken = False
             self.on_select(self.selected_node)
@@ -174,8 +181,8 @@ class DiagramCanvas(tk.Canvas):
         if not self.drag_snapshot_taken:
             self.before_change()
             self.drag_snapshot_taken = True
-        dx = (event.x - self.drag_origin[0]) / self.zoom
-        dy = (event.y - self.drag_origin[1]) / self.zoom
+        dx = (self.canvasx(event.x) - self.drag_origin[0]) / self.zoom
+        dy = (self.canvasy(event.y) - self.drag_origin[1]) / self.zoom
         node = self.graph.nodes[self.selected_node]
         node.x = max(0, self.drag_node_origin[0] + dx)
         node.y = max(0, self.drag_node_origin[1] + dy)
@@ -206,7 +213,24 @@ class DiagramCanvas(tk.Canvas):
         self._set_zoom(1.1 if event.delta > 0 else 0.9, event.x, event.y)
         return "break"
 
-    def _set_zoom(self, factor: float, _x: int, _y: int) -> str:
-        self.zoom = min(2.0, max(0.55, self.zoom * factor))
+    def _set_zoom(self, factor: float, x: int, y: int) -> str:
+        old_zoom = self.zoom
+        model_x = self.canvasx(x) / old_zoom
+        model_y = self.canvasy(y) / old_zoom
+        self.zoom = min(2.0, max(0.55, old_zoom * factor))
+        if self.zoom == old_zoom:
+            return "break"
         self.redraw()
+        region = self.bbox("all") or (0, 0, self.winfo_width(), self.winfo_height())
+        region_width = max(float(region[2] - region[0]), 1.0)
+        region_height = max(float(region[3] - region[1]), 1.0)
+        self.xview_moveto(max(0.0, (model_x * self.zoom - x) / region_width))
+        self.yview_moveto(max(0.0, (model_y * self.zoom - y) / region_height))
+        return "break"
+
+    def _horizontal_wheel(self, event: tk.Event) -> str:
+        return self._scroll_horizontal(-1 if event.delta > 0 else 1)
+
+    def _scroll_horizontal(self, direction: int) -> str:
+        self.xview_scroll(direction, "units")
         return "break"

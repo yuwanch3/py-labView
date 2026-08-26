@@ -25,6 +25,7 @@ class PanelDesigner(tk.Canvas):
         self.on_change = on_change or (lambda: None)
         self.on_value_change = on_value_change or (lambda _values: None)
         self.mode = "edit"
+        self.zoom = 1.0
         self.grid_size = 10
         self.selected_id: str | None = None
         self.values: dict[str, Any] = {}
@@ -35,6 +36,12 @@ class PanelDesigner(tk.Canvas):
         self.bind("<Double-1>", self._double_press)
         self.bind("<B1-Motion>", self._motion)
         self.bind("<ButtonRelease-1>", self._release)
+        self.bind("<Control-MouseWheel>", self._zoom_wheel)
+        self.bind("<Control-Button-4>", lambda event: self._set_zoom(1.1, event.x, event.y))
+        self.bind("<Control-Button-5>", lambda event: self._set_zoom(0.9, event.x, event.y))
+        self.bind("<Shift-MouseWheel>", self._horizontal_wheel)
+        self.bind("<Shift-Button-4>", lambda _event: self._scroll_horizontal(-1))
+        self.bind("<Shift-Button-5>", lambda _event: self._scroll_horizontal(1))
         self.bind("<Configure>", lambda _event: self.redraw())
         self._initialize_values()
         self.redraw()
@@ -48,7 +55,8 @@ class PanelDesigner(tk.Canvas):
         self.selected_id = None
         self._initialize_values()
         canvas = self.panel["canvas"]
-        self.configure(background=canvas["background"], scrollregion=(0, 0, canvas["width"], canvas["height"]))
+        self.configure(background=canvas["background"],
+                       scrollregion=(0, 0, canvas["width"] * self.zoom, canvas["height"] * self.zoom))
         self.redraw()
 
     def rebuild(self, graph: Graph) -> None:
@@ -93,6 +101,9 @@ class PanelDesigner(tk.Canvas):
                 self.create_line(0, y, width, y, fill="#d3d3d3", tags="grid")
         for item in sorted(self.panel["items"], key=lambda entry: entry["z_index"]):
             self._draw_item(item)
+        if self.zoom != 1.0:
+            self.scale("all", 0, 0, self.zoom, self.zoom)
+        self.configure(scrollregion=(0, 0, width * self.zoom, height * self.zoom))
 
     def _draw_item(self, item: dict[str, Any]) -> None:
         bounds = item["bounds"]
@@ -102,7 +113,7 @@ class PanelDesigner(tk.Canvas):
         self.create_rectangle(x, y, x + w, y + h, fill="#f7f7f7", outline="#2070b4" if selected else "#777",
                               width=3 if selected else 1, tags=("panel_item", tag))
         label = item["properties"].get("label", item["kind"].replace("_", " ").title())
-        self.create_text(x + 8, y + 10, text=label, anchor="w", font=("TkDefaultFont", 9, "bold"), tags=("panel_item", tag))
+        self.create_text(x + 8, y + 10, text=label, anchor="w", font=self._font(9, bold=True), tags=("panel_item", tag))
         node_id = item["terminal_node_id"]
         value = self.values.get(node_id, "--")
         kind = item["kind"]
@@ -110,16 +121,16 @@ class PanelDesigner(tk.Canvas):
         if kind == "image_indicator" and isinstance(value, ImageFrame):
             try:
                 image = tk.PhotoImage(data=image_to_ppm(value), format="PPM")
-                scale = max(1, math.ceil(max(image.width() / max(w - 12, 1),
-                                             image.height() / max(h - 30, 1))))
+                scale = max(1, math.ceil(max(image.width() / max((w - 12) * self.zoom, 1),
+                                             image.height() / max((h - 30) * self.zoom, 1))))
                 if scale > 1:
                     image = image.subsample(scale, scale)
                 self._image_refs[item["id"]] = image
                 self.create_image(x + w / 2, y + h / 2 + 10, image=image, tags=("panel_item", tag))
             except (TypeError, ValueError, tk.TclError):
                 self.create_text(x + w / 2, y + h / 2 + 10,
-                                 text=f"Image {value.width} x {value.height} x {value.channels}",
-                                 justify="center", tags=("panel_item", tag))
+                                  text=f"Image {value.width} x {value.height} x {value.channels}",
+                                  justify="center", font=self._font(10), tags=("panel_item", tag))
         elif kind == "boolean_control" and display_type == "radio_start_stop":
             active = bool(value)
             for index, (text, selected_value) in enumerate((("STOP (0)", False), ("START (1)", True))):
@@ -127,7 +138,7 @@ class PanelDesigner(tk.Canvas):
                 self.create_oval(center_x - 9, y + h / 2 - 3, center_x + 9, y + h / 2 + 15,
                                  fill="#35b85a" if active == selected_value else "#fff", outline="#222",
                                  tags=("panel_item", tag))
-                self.create_text(center_x, y + h - 10, text=text, tags=("panel_item", tag))
+                self.create_text(center_x, y + h - 10, text=text, font=self._font(10), tags=("panel_item", tag))
         elif display_type == "gauge" and isinstance(value, (int, float)):
             fraction = gauge_fraction(value, item["properties"].get("minimum", 0),
                                       item["properties"].get("maximum", 100))
@@ -135,7 +146,8 @@ class PanelDesigner(tk.Canvas):
             self.create_rectangle(left, top, right, bottom, fill="#ddd", outline="#333", tags=("panel_item", tag))
             self.create_rectangle(left, top, left + (right - left) * fraction, bottom,
                                   fill="#00866a", outline="", tags=("panel_item", tag))
-            self.create_text(x + w / 2, bottom + 12, text=self._format(value), tags=("panel_item", tag))
+            self.create_text(x + w / 2, bottom + 12, text=self._format(value),
+                             font=self._font(10), tags=("panel_item", tag))
         elif display_type == "table":
             rows = table_rows(value)
             if rows:
@@ -148,13 +160,14 @@ class PanelDesigner(tk.Canvas):
                         self.create_rectangle(x0, y0, x0 + cell_w, y0 + cell_h, outline="#aaa",
                                               tags=("panel_item", tag))
                         self.create_text(x0 + cell_w / 2, y0 + cell_h / 2, text=self._format(cell)[:16],
-                                         font=("TkFixedFont", 8), tags=("panel_item", tag))
+                                         font=self._font(8, family="TkFixedFont"), tags=("panel_item", tag))
         elif display_type == "dropdown" and kind == "string_control":
             self.create_rectangle(x + 8, y + h / 2 - 8, x + w - 8, y + h / 2 + 20,
                                   fill="white", outline="#555", tags=("panel_item", tag))
             self.create_text(x + 14, y + h / 2 + 6, text=self._format(value), anchor="w",
-                             tags=("panel_item", tag))
-            self.create_text(x + w - 20, y + h / 2 + 6, text="▼", tags=("panel_item", tag))
+                             font=self._font(10), tags=("panel_item", tag))
+            self.create_text(x + w - 20, y + h / 2 + 6, text="▼",
+                             font=self._font(10), tags=("panel_item", tag))
         elif kind == "boolean_control" or (kind == "indicator" and isinstance(value, bool)):
             active = bool(value)
             self.create_oval(x + w / 2 - 18, y + h / 2 - 10, x + w / 2 + 18, y + h / 2 + 26,
@@ -168,14 +181,14 @@ class PanelDesigner(tk.Canvas):
                     points.extend((x + 8 + index * (w - 16) / (len(numbers) - 1), y + h - 8 - (number - low) / span * (h - 36)))
                 self.create_line(*points, fill="#00866a", width=2, tags=("panel_item", tag))
             self.create_text(x + w / 2, y + h - 5,
-                             text=item["properties"].get("x_label", "Baris Pixel"), anchor="s",
-                             font=("TkDefaultFont", 7), tags=("panel_item", tag))
+                              text=item["properties"].get("x_label", "Baris Pixel"), anchor="s",
+                              font=self._font(7), tags=("panel_item", tag))
             self.create_text(x + 4, y + h / 2,
-                             text=item["properties"].get("y_label", "Intensitas (Threshold)"), anchor="w",
-                             angle=90, font=("TkDefaultFont", 7), tags=("panel_item", tag))
+                              text=item["properties"].get("y_label", "Intensitas (Threshold)"), anchor="w",
+                              angle=90, font=self._font(7), tags=("panel_item", tag))
         else:
             self.create_text(x + w / 2, y + h / 2 + 10, text=self._format(value),
-                             font=("TkFixedFont", 13, "bold"), tags=("panel_item", tag))
+                             font=self._font(13, family="TkFixedFont", bold=True), tags=("panel_item", tag))
         if selected and self.mode == "edit":
             self.create_rectangle(x + w - 10, y + h - 10, x + w, y + h, fill="#2070b4", tags=("resize", tag))
 
@@ -184,6 +197,10 @@ class PanelDesigner(tk.Canvas):
         if isinstance(value, float): return f"{value:.6g}"
         if isinstance(value, (list, dict)): return json.dumps(value, ensure_ascii=False)[:80]
         return str(value)
+
+    def _font(self, size: int, family: str = "TkDefaultFont", bold: bool = False) -> tuple[object, ...]:
+        scaled_size = max(5, round(size * self.zoom))
+        return (family, scaled_size, "bold") if bold else (family, scaled_size)
 
     def _item_at(self, x: float, y: float) -> tuple[dict[str, Any] | None, bool]:
         for item in reversed(sorted(self.panel["items"], key=lambda entry: entry["z_index"])):
@@ -194,7 +211,7 @@ class PanelDesigner(tk.Canvas):
         return None, False
 
     def _press(self, event: tk.Event) -> None:
-        x, y = self.canvasx(event.x), self.canvasy(event.y)
+        x, y = self._document_point(event)
         item, resize = self._item_at(x, y)
         if not item:
             self.selected_id = None; self.redraw(); return
@@ -225,7 +242,7 @@ class PanelDesigner(tk.Canvas):
         if not self._drag or self.mode != "edit": return
         item_id, start_x, start_y, original, resize = self._drag
         item = next(entry for entry in self.panel["items"] if entry["id"] == item_id)
-        x, y = self.canvasx(event.x), self.canvasy(event.y)
+        x, y = self._document_point(event)
         snap = lambda value: round(value / self.grid_size) * self.grid_size
         if resize:
             item["bounds"]["width"] = max(40, snap(original["width"] + x - start_x))
@@ -237,7 +254,7 @@ class PanelDesigner(tk.Canvas):
 
     def _double_press(self, event: tk.Event) -> None:
         if self.mode != "operate": return
-        item, _resize = self._item_at(self.canvasx(event.x), self.canvasy(event.y))
+        item, _resize = self._item_at(*self._document_point(event))
         if not item or not item["kind"].endswith("control") or item["kind"] == "boolean_control": return
         node_id = item["terminal_node_id"]
         raw = simpledialog.askstring("Control Value", "Value:", initialvalue=self._format(self.values.get(node_id, "")), parent=self)
@@ -258,6 +275,34 @@ class PanelDesigner(tk.Canvas):
         if self._drag:
             self._drag = None
             self.on_change()
+
+    def _document_point(self, event: tk.Event) -> tuple[float, float]:
+        return self.canvasx(event.x) / self.zoom, self.canvasy(event.y) / self.zoom
+
+    def _zoom_wheel(self, event: tk.Event) -> str:
+        self._set_zoom(1.1 if event.delta > 0 else 0.9, event.x, event.y)
+        return "break"
+
+    def _set_zoom(self, factor: float, x: int, y: int) -> str:
+        old_zoom = self.zoom
+        document_x = self.canvasx(x) / old_zoom
+        document_y = self.canvasy(y) / old_zoom
+        self.zoom = min(2.0, max(0.55, old_zoom * factor))
+        if self.zoom == old_zoom:
+            return "break"
+        self.redraw()
+        width = max(float(self.panel["canvas"]["width"]) * self.zoom, 1.0)
+        height = max(float(self.panel["canvas"]["height"]) * self.zoom, 1.0)
+        self.xview_moveto(max(0.0, (document_x * self.zoom - x) / width))
+        self.yview_moveto(max(0.0, (document_y * self.zoom - y) / height))
+        return "break"
+
+    def _horizontal_wheel(self, event: tk.Event) -> str:
+        return self._scroll_horizontal(-1 if event.delta > 0 else 1)
+
+    def _scroll_horizontal(self, direction: int) -> str:
+        self.xview_scroll(direction, "units")
+        return "break"
 
 
 FrontPanel = PanelDesigner
