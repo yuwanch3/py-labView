@@ -83,6 +83,20 @@ class PanelDesigner(tk.Canvas):
                        if item["kind"].endswith("control")}
         return {node_id: value for node_id, value in self.values.items() if node_id in control_ids}
 
+    def sync_control_value_from_model(self, node_id: str, value: Any) -> bool:
+        """Replace a cached control override after an explicit model edit.
+
+        Ordinary redraws preserve values entered in Operate mode. Properties
+        Apply is different: it deliberately establishes a new model value, so
+        the cache passed to Run Once must follow that value rather than silently
+        overriding it with the pre-edit state.
+        """
+        if any(item["terminal_node_id"] == node_id and item["kind"].endswith("control")
+               for item in self.panel["items"]):
+            self.values[node_id] = value
+            return True
+        return False
+
     def update_values(self, values: dict[str, Any]) -> None:
         self.values.update(values)
         for item in self.panel["items"]:

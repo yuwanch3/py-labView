@@ -39,7 +39,7 @@
             "y": 180,
             "label": "Camera Mode",
             "properties": {
-              "value": "usb",
+              "value": "network",
               "display_type": "string"
             }
           },
@@ -429,6 +429,28 @@
             "properties": {
               "display_type": "numeric",
               "style": "default"
+            }
+          },
+          {
+            "id": "capture_oil",
+            "type": "boolean_constant",
+            "x": 1200,
+            "y": 420,
+            "label": "Capture Oil (live)",
+            "properties": {
+              "value": true,
+              "display_type": "boolean"
+            }
+          },
+          {
+            "id": "capture_wire",
+            "type": "boolean_constant",
+            "x": 1200,
+            "y": 500,
+            "label": "Capture Reference",
+            "properties": {
+              "value": false,
+              "display_type": "boolean"
             }
           }
         ],
@@ -838,6 +860,20 @@
             "target_node": "ift_mn_display",
             "target_port": "value",
             "data_type": "numeric"
+          },
+          {
+            "source_node": "capture_oil",
+            "source_port": "out",
+            "target_node": "oil_camera",
+            "target_port": "capture_trigger",
+            "data_type": "boolean"
+          },
+          {
+            "source_node": "capture_wire",
+            "source_port": "out",
+            "target_node": "wire_camera",
+            "target_port": "capture_trigger",
+            "data_type": "boolean"
           }
         ]
       },
@@ -1258,6 +1294,25 @@
             "extensions": {
               "role": "global_abort",
               "binding_status": "visual parity only; RunController abort binding not implemented"
+            }
+          },
+          {
+            "id": "fp-wire-capture",
+            "kind": "boolean_control",
+            "terminal_node_id": "capture_wire",
+            "bounds": {
+              "x": 470,
+              "y": 560,
+              "width": 230,
+              "height": 70
+            },
+            "z_index": 22,
+            "properties": {
+              "label": "Capture Reference",
+              "display_type": "push_button"
+            },
+            "extensions": {
+              "role": "staged wire-comparison capture trigger"
             }
           }
         ],

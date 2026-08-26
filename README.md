@@ -1,4 +1,4 @@
-# PyLabView Studio 4.3.3
+# PyLabView Studio 4.3.4
 
 PyLabView Studio adalah aplikasi desktop visual dataflow independen untuk Python 3.10+ dan `tkinter`. V4 mempertahankan core standard-library dan schema proyek v3, lalu menambahkan instrumentation adapters nyata yang dimuat secara opsional. Proyek ini tidak berafiliasi dengan National Instruments; LabVIEW adalah merek dagang pemiliknya.
 
@@ -36,7 +36,7 @@ NI memerlukan package Python `nidaqmx` **dan** NI-DAQmx vendor runtime/driver ya
 
 ## Compatibility
 
-App version adalah 4.3.3; format persisted tetap `pylabview-project` schema version 3. Node/properties baru dapat disimpan tanpa field schema baru. V1/v2 tetap dimigrasi ke schema v3; semua proyek v3 tetap dapat dibuka.
+App version adalah 4.3.4; format persisted tetap `pylabview-project` schema version 3. Node/properties baru dapat disimpan tanpa field schema baru. V1/v2 tetap dimigrasi ke schema v3; semua proyek v3 tetap dapat dibuka.
 
 ## Test
 

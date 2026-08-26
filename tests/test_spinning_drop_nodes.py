@@ -392,6 +392,29 @@ class SpinningDropNodeTests(unittest.TestCase):
         self.assertEqual(cv2.sources, [2, "http://192.168.1.5:4747/video"])
         self.assertTrue(all(capture.released for capture in cv2.captures))
 
+    def camera_pass(self, runtime, session, trigger, node_id="cam"):
+        node = Node(node_id, "camera_capture_dual_mode", 0, 0, "cam", {})
+        inputs = {"mode": "network", "device_index": 0, "network_url": "http://cam/video",
+                  "timeout_seconds": 1, "capture_trigger": trigger}
+        return runtime._evaluate(node, inputs, {}, [], session=session)
+
+    def test_camera_capture_is_trigger_held_and_distinct_per_node(self):
+        session = RunSession(resources=ResourceManager())
+        cv2 = CaptureCv2()
+        runtime = DataflowRuntime(vision=VisionAdapter(cv2, object()))
+        self.assertIsNone(self.camera_pass(runtime, session, False),
+                          "untriggered staged capture must not grab before operator acts")
+        first = self.camera_pass(runtime, session, True)
+        self.assertIsNotNone(first)
+        self.assertEqual(len(cv2.captures), 1)
+        held = self.camera_pass(runtime, session, False)
+        self.assertIs(held, first, "held trigger reuses the frame, no silent re-grab")
+        self.assertEqual(len(cv2.captures), 1)
+        live = self.camera_pass(runtime, session, True)
+        self.assertEqual(len(cv2.captures), 2)
+        self.assertIsNot(live, first, "each trigger grabs a genuinely new frame")
+        session.close()
+
     def test_spinning_drop_panel_gauge_and_table_helpers(self):
         self.assertEqual(gauge_fraction(3000, 0, 6000), 0.5)
         self.assertEqual(gauge_fraction(300, 0, 255), 1.0)
@@ -414,6 +437,18 @@ class SpinningDropNodeTests(unittest.TestCase):
                     "spinning_drop_stage_watcher", "rpm_stall_watchdog", "report_generate"}
         self.assertTrue(required <= {node.type for node in graph.nodes.values()})
         self.assertEqual(DataflowRuntime().validate(graph, project, project.main_vi), [])
+        self.assertEqual(graph.nodes["oil_mode"].properties["value"], "network",
+                         "DroidCam/network capture must be the example default")
+        # separate capture triggers: oil live, wire operator-staged
+        oil_trigger = [w for w in graph.wires if w.target_node == "oil_camera" and w.target_port == "capture_trigger"]
+        wire_trigger = [w for w in graph.wires if w.target_node == "wire_camera" and w.target_port == "capture_trigger"]
+        self.assertEqual({w.source_node for w in oil_trigger}, {"capture_oil"})
+        self.assertEqual({w.source_node for w in wire_trigger}, {"capture_wire"})
+        self.assertTrue(graph.nodes["capture_oil"].properties["value"])
+        self.assertFalse(graph.nodes["capture_wire"].properties["value"])
+        self.assertTrue(any(item["terminal_node_id"] == "capture_wire"
+                            and item["properties"].get("label") == "Capture Reference"
+                            for item in project.main.front_panel["items"]))
         labels = {item["properties"].get("label", "") for item in project.main.front_panel["items"]}
         for label in ("Motor", "RPM ACT", "PWM ACT", "COM Arduino", "WIFI IP", "TIME(s)",
                       "Picture Oil", "Picture Comparison", "Grafik Oil", "Grafik Kawat",
@@ -436,7 +471,10 @@ class SpinningDropNodeTests(unittest.TestCase):
             runtime = DataflowRuntime(serial=SerialAdapter(ArduinoBackend(stream)),
                                       vision=VisionAdapter(CaptureCv2(), object()),
                                       data_root=directory)
-            result = runtime.run(project.main.graph, {}, project, project.main_vi)
+            # wire-comparison capture is operator-triggered; enable it for this run
+            controls = {node.id: True for node in project.main.graph.nodes.values()
+                        if node.type == "boolean_constant" and node.id in ("capture_oil", "capture_wire")}
+            result = runtime.run(project.main.graph, controls, project, project.main_vi)
             self.assertFalse(any("Cycle detected" in error for error in result.errors))
             self.assertFalse(any("missing input" in error for error in result.errors))
             csv_path = Path(directory, "spinning-drop-ift.csv")

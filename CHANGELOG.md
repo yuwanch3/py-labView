@@ -2,7 +2,20 @@
 
 All notable user-facing changes to PyLabView Studio are recorded here.
 
-## [4.3.3] - 2026-08-26
+## [4.3.4] - 2026-08-26
+
+### Fixed
+
+- Properties Apply now synchronizes the Front Panel's cached control value so a value edited in the inspector (for example switching the Camera Mode constant from `usb` to `network`) reaches Run Once even before a Save. Previously the panel held a stale override and execution silently used the old value. Operate-mode control edits are still preserved on ordinary redraws.
+- The spinning-drop example no longer produces an identical "Picture Oil" and "Picture Comparison". The two captures now run as distinct trigger domains: the oil camera captures live each tick, while the wire-comparison camera holds its last frame and only re-captures when the operator presses the new "Capture Reference" button.
+- `examples/spinning_drop_ift.json` defaults Camera Mode to `network`, matching the DroidCam setup, and adds the staged wire-capture button.
+
+### Compatibility
+
+- Project schema remains version 3. `camera_capture_dual_mode` gained a `capture_trigger` boolean input; existing captured images and node wiring remain compatible because an unwired trigger defaults to live behavior.
+
+[4.3.4]: https://github.com/yuwanch3/py-labView/releases/tag/v4.3.4
+[4.3.3]: https://github.com/yuwanch3/py-labView/releases/tag/v4.3.3
 
 ### Added
 
