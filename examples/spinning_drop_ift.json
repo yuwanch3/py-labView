@@ -61,7 +61,7 @@
             "y": 420,
             "label": "WIFI IP / Camera URL",
             "properties": {
-              "value": "http://192.168.1.2:4747/video",
+              "value": "http://192.168.0.8:4747/video/force/1280x720",
               "display_type": "string"
             }
           },
@@ -72,7 +72,7 @@
             "y": 660,
             "label": "Known Wire Diameter (mm)",
             "properties": {
-              "value": 0.8,
+              "value": 0.5,
               "display_type": "numeric",
               "requires_manual_measurement": true
             }
@@ -80,30 +80,30 @@
           {
             "id": "oil_orientation",
             "type": "string_constant",
-            "x": 20,
-            "y": 740,
+            "x": 20.0,
+            "y": 741.0,
             "label": "Oil Scan Orientation",
             "properties": {
-              "value": "horizontal",
+              "value": "vertical",
               "display_type": "string"
             }
           },
           {
             "id": "wire_orientation",
             "type": "string_constant",
-            "x": 20,
-            "y": 820,
+            "x": 20.0,
+            "y": 821.0,
             "label": "Wire Scan Orientation",
             "properties": {
-              "value": "horizontal",
+              "value": "vertical",
               "display_type": "string"
             }
           },
           {
             "id": "oil_camera",
             "type": "camera_capture_dual_mode",
-            "x": 430,
-            "y": 240,
+            "x": 449.0,
+            "y": 269.0,
             "label": "Picture Oil Capture",
             "properties": {
               "measurement_duration_seconds": 1.0,
@@ -113,8 +113,8 @@
           {
             "id": "wire_camera",
             "type": "camera_capture_dual_mode",
-            "x": 430,
-            "y": 400,
+            "x": 426.0,
+            "y": 421.0,
             "label": "Picture Comparison Wire Capture",
             "properties": {
               "measurement_duration_seconds": 1.0,
@@ -124,8 +124,8 @@
           {
             "id": "oil_edge",
             "type": "edge_intensity_profile",
-            "x": 650,
-            "y": 240,
+            "x": 649.1518047632551,
+            "y": 241.69639047348994,
             "label": "Oil Edge / Intensity Profile",
             "properties": {
               "threshold": 127.0,
@@ -135,8 +135,8 @@
           {
             "id": "wire_edge",
             "type": "edge_intensity_profile",
-            "x": 650,
-            "y": 400,
+            "x": 651.8481952367449,
+            "y": 401.69639047348994,
             "label": "Wire Edge / Intensity Profile",
             "properties": {
               "threshold": 127.0,
@@ -154,8 +154,8 @@
           {
             "id": "drop_mm",
             "type": "pixel_to_mm",
-            "x": 1070,
-            "y": 300,
+            "x": 1074.0,
+            "y": 257.0,
             "label": "Drop Diameter mm",
             "properties": {}
           },
@@ -182,8 +182,8 @@
           {
             "id": "rpm_display",
             "type": "display",
-            "x": 860,
-            "y": 20,
+            "x": 800.0,
+            "y": 25.0,
             "label": "RPM ACT",
             "properties": {
               "display_type": "gauge",
@@ -193,8 +193,8 @@
           {
             "id": "pwm_display",
             "type": "display",
-            "x": 860,
-            "y": 100,
+            "x": 799.0,
+            "y": 106.0,
             "label": "PWM ACT",
             "properties": {
               "display_type": "gauge",
@@ -214,8 +214,8 @@
           {
             "id": "wire_picture",
             "type": "image_display",
-            "x": 880,
-            "y": 500,
+            "x": 869.0,
+            "y": 521.0,
             "label": "Picture Comparison (Wire)",
             "properties": {
               "display_type": "image"
@@ -236,8 +236,8 @@
           {
             "id": "wire_chart",
             "type": "chart",
-            "x": 1080,
-            "y": 500,
+            "x": 1081.0,
+            "y": 500.0,
             "label": "Grafik Kawat",
             "properties": {
               "history": 640,
@@ -270,8 +270,8 @@
           {
             "id": "wire_px_display",
             "type": "display",
-            "x": 880,
-            "y": 420,
+            "x": 868.0,
+            "y": 454.0,
             "label": "Wire Diameter (px)",
             "properties": {
               "display_type": "numeric",
@@ -292,8 +292,8 @@
           {
             "id": "omega_display",
             "type": "display",
-            "x": 1290,
-            "y": 180,
+            "x": 1420.0,
+            "y": 207.0,
             "label": "w²",
             "properties": {
               "display_type": "numeric",
@@ -303,8 +303,8 @@
           {
             "id": "radius_display",
             "type": "display",
-            "x": 1290,
-            "y": 260,
+            "x": 1427.0,
+            "y": 284.0,
             "label": "r³",
             "properties": {
               "display_type": "numeric",
@@ -314,8 +314,8 @@
           {
             "id": "ift_n_display",
             "type": "display",
-            "x": 1290,
-            "y": 420,
+            "x": 1420.0,
+            "y": 396.0,
             "label": "IFT N/m",
             "properties": {
               "display_type": "numeric",
@@ -325,8 +325,8 @@
           {
             "id": "ift_mn_display",
             "type": "display",
-            "x": 1290,
-            "y": 500,
+            "x": 1352.0,
+            "y": 480.0,
             "label": "IFT mN/m",
             "properties": {
               "display_type": "numeric",
@@ -336,8 +336,8 @@
           {
             "id": "table_display",
             "type": "display",
-            "x": 1490,
-            "y": 500,
+            "x": 1510.0,
+            "y": 494.0,
             "label": "Measurement Log Table",
             "properties": {
               "display_type": "table",
@@ -351,7 +351,7 @@
             "y": 80,
             "label": "Arduino Telemetry Reader",
             "properties": {
-              "baudrate": 115200,
+              "baudrate": 9600,
               "timeout": 0.2,
               "max_lines": 32,
               "response_bytes": 4096
@@ -360,8 +360,8 @@
           {
             "id": "stall_guard",
             "type": "rpm_stall_watchdog",
-            "x": 870,
-            "y": 80,
+            "x": 876.0,
+            "y": 59.0,
             "label": "RPM Stall Watchdog (PC-side inference)",
             "properties": {
               "stall_seconds": 10.0
@@ -378,8 +378,8 @@
           {
             "id": "cam_timeout",
             "type": "numeric_constant",
-            "x": 20,
-            "y": 500,
+            "x": 18.0,
+            "y": 502.0,
             "label": "Camera Timeout (s)",
             "properties": {
               "value": 1.0,
@@ -401,8 +401,8 @@
           {
             "id": "global_stop",
             "type": "boolean_constant",
-            "x": 20,
-            "y": 900,
+            "x": 19.0,
+            "y": 900.0,
             "label": "STOP",
             "properties": {
               "value": false,
@@ -452,6 +452,69 @@
               "value": false,
               "display_type": "boolean"
             }
+          },
+          {
+            "id": "density_mode",
+            "type": "string_constant",
+            "x": 20,
+            "y": 980,
+            "label": "Density Input Mode",
+            "properties": {
+              "value": "Manual Δρ",
+              "display_type": "string"
+            }
+          },
+          {
+            "id": "fluid_1",
+            "type": "string_constant",
+            "x": 20,
+            "y": 1060,
+            "label": "Fluid 1",
+            "properties": {
+              "value": "Water",
+              "display_type": "string"
+            }
+          },
+          {
+            "id": "density_1",
+            "type": "numeric_constant",
+            "x": 20,
+            "y": 1140,
+            "label": "Density 1 (Kg/m3)",
+            "properties": {
+              "value": 1000.0,
+              "display_type": "numeric"
+            }
+          },
+          {
+            "id": "fluid_2",
+            "type": "string_constant",
+            "x": 20,
+            "y": 1220,
+            "label": "Fluid 2",
+            "properties": {
+              "value": "Oil",
+              "display_type": "string"
+            }
+          },
+          {
+            "id": "density_2",
+            "type": "numeric_constant",
+            "x": 20,
+            "y": 1300,
+            "label": "Density 2 (Kg/m3)",
+            "properties": {
+              "value": 850.0,
+              "display_type": "numeric"
+            }
+          },
+          {
+            "id": "density_selector",
+            "type": "density_input_selector",
+            "x": 1030,
+            "y": 620,
+            "label": "Density Input Selector",
+            "properties": {}
           }
         ],
         "wires": [
@@ -610,13 +673,6 @@
             "data_type": "numeric"
           },
           {
-            "source_node": "density_input",
-            "source_port": "out",
-            "target_node": "ift",
-            "target_port": "delta_rho",
-            "data_type": "numeric"
-          },
-          {
             "source_node": "reader",
             "source_port": "rpm",
             "target_node": "watcher",
@@ -684,13 +740,6 @@
             "source_port": "diameter_mm",
             "target_node": "watcher",
             "target_port": "diameter_mm",
-            "data_type": "numeric"
-          },
-          {
-            "source_node": "density_input",
-            "source_port": "out",
-            "target_node": "watcher",
-            "target_port": "delta_rho",
             "data_type": "numeric"
           },
           {
@@ -874,6 +923,62 @@
             "target_node": "wire_camera",
             "target_port": "capture_trigger",
             "data_type": "boolean"
+          },
+          {
+            "source_node": "density_mode",
+            "source_port": "out",
+            "target_node": "density_selector",
+            "target_port": "mode",
+            "data_type": "string"
+          },
+          {
+            "source_node": "density_input",
+            "source_port": "out",
+            "target_node": "density_selector",
+            "target_port": "manual_delta_rho",
+            "data_type": "numeric"
+          },
+          {
+            "source_node": "fluid_1",
+            "source_port": "out",
+            "target_node": "density_selector",
+            "target_port": "fluid_1",
+            "data_type": "string"
+          },
+          {
+            "source_node": "density_1",
+            "source_port": "out",
+            "target_node": "density_selector",
+            "target_port": "density_1",
+            "data_type": "numeric"
+          },
+          {
+            "source_node": "fluid_2",
+            "source_port": "out",
+            "target_node": "density_selector",
+            "target_port": "fluid_2",
+            "data_type": "string"
+          },
+          {
+            "source_node": "density_2",
+            "source_port": "out",
+            "target_node": "density_selector",
+            "target_port": "density_2",
+            "data_type": "numeric"
+          },
+          {
+            "source_node": "density_selector",
+            "source_port": "delta_rho",
+            "target_node": "ift",
+            "target_port": "delta_rho",
+            "data_type": "numeric"
+          },
+          {
+            "source_node": "density_selector",
+            "source_port": "delta_rho",
+            "target_node": "watcher",
+            "target_port": "delta_rho",
+            "data_type": "numeric"
           }
         ]
       },
@@ -1215,7 +1320,7 @@
             "terminal_node_id": "oil_chart",
             "bounds": {
               "x": 920,
-              "y": 140,
+              "y": 200,
               "width": 320,
               "height": 250
             },
@@ -1238,7 +1343,7 @@
             "terminal_node_id": "wire_chart",
             "bounds": {
               "x": 1260,
-              "y": 140,
+              "y": 200,
               "width": 320,
               "height": 250
             },
@@ -1314,6 +1419,227 @@
             "extensions": {
               "role": "staged wire-comparison capture trigger"
             }
+          },
+          {
+            "id": "panel-oil_mode",
+            "kind": "string_control",
+            "terminal_node_id": "oil_mode",
+            "bounds": {
+              "x": 504,
+              "y": 1074,
+              "width": 210,
+              "height": 120
+            },
+            "z_index": 23,
+            "properties": {
+              "label": "Camera Mode"
+            },
+            "extensions": {}
+          },
+          {
+            "id": "panel-oil_source",
+            "kind": "numeric_control",
+            "terminal_node_id": "oil_source",
+            "bounds": {
+              "x": 24,
+              "y": 1224,
+              "width": 210,
+              "height": 120
+            },
+            "z_index": 24,
+            "properties": {
+              "label": "USB Device Index"
+            },
+            "extensions": {}
+          },
+          {
+            "id": "panel-wire_known",
+            "kind": "numeric_control",
+            "terminal_node_id": "wire_known",
+            "bounds": {
+              "x": 264,
+              "y": 1224,
+              "width": 210,
+              "height": 120
+            },
+            "z_index": 25,
+            "properties": {
+              "label": "Known Wire Diameter (mm)"
+            },
+            "extensions": {}
+          },
+          {
+            "id": "panel-oil_orientation",
+            "kind": "string_control",
+            "terminal_node_id": "oil_orientation",
+            "bounds": {
+              "x": 504,
+              "y": 1224,
+              "width": 210,
+              "height": 120
+            },
+            "z_index": 26,
+            "properties": {
+              "label": "Oil Scan Orientation"
+            },
+            "extensions": {}
+          },
+          {
+            "id": "panel-wire_orientation",
+            "kind": "string_control",
+            "terminal_node_id": "wire_orientation",
+            "bounds": {
+              "x": 24,
+              "y": 1374,
+              "width": 210,
+              "height": 120
+            },
+            "z_index": 27,
+            "properties": {
+              "label": "Wire Scan Orientation"
+            },
+            "extensions": {}
+          },
+          {
+            "id": "panel-cam_timeout",
+            "kind": "numeric_control",
+            "terminal_node_id": "cam_timeout",
+            "bounds": {
+              "x": 264,
+              "y": 1374,
+              "width": 210,
+              "height": 120
+            },
+            "z_index": 28,
+            "properties": {
+              "label": "Camera Timeout (s)"
+            },
+            "extensions": {}
+          },
+          {
+            "id": "panel-capture_oil",
+            "kind": "boolean_control",
+            "terminal_node_id": "capture_oil",
+            "bounds": {
+              "x": 504,
+              "y": 1374,
+              "width": 210,
+              "height": 120
+            },
+            "z_index": 29,
+            "properties": {
+              "label": "Capture Oil (live)"
+            },
+            "extensions": {}
+          },
+          {
+            "id": "fp-density-mode",
+            "kind": "string_control",
+            "terminal_node_id": "density_mode",
+            "bounds": {
+              "x": 720,
+              "y": 550,
+              "width": 160,
+              "height": 80
+            },
+            "z_index": 30,
+            "properties": {
+              "label": "Density Mode",
+              "display_type": "dropdown",
+              "options": [
+                "Manual Δρ",
+                "Template"
+              ]
+            },
+            "extensions": {
+              "role": "density input mode selector"
+            }
+          },
+          {
+            "id": "fp-fluid-1",
+            "kind": "string_control",
+            "terminal_node_id": "fluid_1",
+            "bounds": {
+              "x": 890,
+              "y": 550,
+              "width": 160,
+              "height": 80
+            },
+            "z_index": 31,
+            "properties": {
+              "label": "Fluid 1",
+              "display_type": "dropdown",
+              "options": [
+                "Water",
+                "Oil",
+                "Custom"
+              ]
+            },
+            "extensions": {
+              "role": "first fluid template selector"
+            }
+          },
+          {
+            "id": "fp-density-1",
+            "kind": "numeric_control",
+            "terminal_node_id": "density_1",
+            "bounds": {
+              "x": 1060,
+              "y": 550,
+              "width": 160,
+              "height": 80
+            },
+            "z_index": 32,
+            "properties": {
+              "label": "Density 1 (Kg/m3)",
+              "editor": "spinbox"
+            },
+            "extensions": {
+              "role": "first fluid density value"
+            }
+          },
+          {
+            "id": "fp-fluid-2",
+            "kind": "string_control",
+            "terminal_node_id": "fluid_2",
+            "bounds": {
+              "x": 1230,
+              "y": 550,
+              "width": 160,
+              "height": 80
+            },
+            "z_index": 33,
+            "properties": {
+              "label": "Fluid 2",
+              "display_type": "dropdown",
+              "options": [
+                "Water",
+                "Oil",
+                "Custom"
+              ]
+            },
+            "extensions": {
+              "role": "second fluid template selector"
+            }
+          },
+          {
+            "id": "fp-density-2",
+            "kind": "numeric_control",
+            "terminal_node_id": "density_2",
+            "bounds": {
+              "x": 1400,
+              "y": 550,
+              "width": 160,
+              "height": 80
+            },
+            "z_index": 34,
+            "properties": {
+              "label": "Density 2 (Kg/m3)",
+              "editor": "spinbox"
+            },
+            "extensions": {
+              "role": "second fluid density value"
+            }
           }
         ],
         "extensions": {
@@ -1322,7 +1648,8 @@
           "architecture_status": "The 6-stage RPM sequence (1000..6000, 3 min per stage, autostop after 3 min at 6000 RPM) runs entirely in the Arduino firmware. PyLabView Studio is a passive event listener: spinning_drop_stage_watcher appends one table row per firmware stage-completion event (5x TARGET_RPM + 1x ACK:AUTOSTOP_6000) and never times anything itself.",
           "time_fields_status": "TIME(s) displays show the firmware telemetry field TIME (seconds since the last TARGET_RPM change); the second display is a reserved duplicate.",
           "stop_button_binding": "The red STOP button mirrors the original front panel visually; binding it to the application-level RunController abort is not implemented yet.",
-          "physical_validation": "not performed"
+          "physical_validation": "not performed",
+          "density_template_status": "Density selector is active. Manual Δρ preserves the original direct-entry workflow. Template mode resolves Water=1000 kg/m3, Oil=850 kg/m3, or Custom manual densities, then supplies abs(density_1-density_2) to Vonnegut IFT and the measurement watcher."
         }
       },
       "subdiagrams": {}

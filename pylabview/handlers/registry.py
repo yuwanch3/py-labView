@@ -43,7 +43,7 @@ BUILTIN_HANDLERS = HandlerRegistry()
 
 _MODULES = (
     "core_math", "collections", "structures", "sync", "io", "instrumentation",
-    "vision", "network", "project", "spinning_drop",
+    "vision", "network", "project", "spinning_drop", "spinning_drop_manual",
 )
 
 
