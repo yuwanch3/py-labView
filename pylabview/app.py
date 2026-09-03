@@ -34,12 +34,22 @@ from .runtime import DataflowRuntime
 from .execution import RunController
 from .plugins import DEFAULT_PLUGIN_REGISTRY
 from .startup_screen import StartupScreen
+from .paths import (
+    bundled_assets_dir,
+    bundled_examples_dir,
+    copy_default_examples,
+    ensure_user_directories,
+    measurement_exports_dir,
+)
 
 
 class StudioApp(tk.Tk):
 
     def __init__(self) -> None:
         super().__init__()
+
+        ensure_user_directories()
+        copy_default_examples()
 
         self.title("PyLabView Studio")
         self.geometry("1240x780")
@@ -108,6 +118,11 @@ class StudioApp(tk.Tk):
         self._measurement_exported = False
         self._last_motor_control = False
 
+        # Capture Reference momentary reset:
+        # wait until one runtime result has actually processed the
+        # True trigger before returning the control to False.
+        self._capture_reference_reset_pending = False
+
         # ========================================================
         # RUNTIME UI REFRESH CONTROL
         # ========================================================
@@ -153,7 +168,10 @@ class StudioApp(tk.Tk):
 
     @staticmethod
     def _startup_logo_path() -> Path:
-        return Path.cwd() / "assets" / "gmj-logo.png"
+        return (
+            bundled_assets_dir()
+            / "gmj-logo.png"
+        )
 
     @staticmethod
     def _startup_project_path(
@@ -167,8 +185,7 @@ class StudioApp(tk.Tk):
         )
 
         return (
-            Path.cwd()
-            / "examples"
+            bundled_examples_dir()
             / filename
         )
 
@@ -400,12 +417,6 @@ class StudioApp(tk.Tk):
         )
 
         run_menu.add_command(
-            label="Run Once",
-            accelerator="F5",
-            command=self.run_once,
-        )
-
-        run_menu.add_command(
             label="Run Continuously",
             accelerator="F6",
             command=self.toggle_continuous,
@@ -582,16 +593,6 @@ class StudioApp(tk.Tk):
             side="left",
             fill="y",
             padx=8,
-        )
-
-        ttk.Button(
-            toolbar,
-            text="Run Once",
-            style="Run.TButton",
-            command=self.run_once,
-        ).pack(
-            side="left",
-            padx=2,
         )
 
         self.run_button = ttk.Button(
@@ -1399,13 +1400,6 @@ class StudioApp(tk.Tk):
         )
 
         self.bind_all(
-            "<F5>",
-            lambda _e: (
-                self.run_once()
-            ),
-        )
-
-        self.bind_all(
             "<F6>",
             lambda _e: (
                 self.toggle_continuous()
@@ -1551,6 +1545,46 @@ class StudioApp(tk.Tk):
             Any,
         ],
     ) -> None:
+
+        # Front Panel red STOP:
+        # same application-level GLOBAL STOP as the toolbar Stop button.
+        # Reset the momentary control immediately after handling it.
+        if bool(
+            values.get(
+                "global_stop",
+                False,
+            )
+        ):
+            self.stop()
+
+            if self.front_panel:
+                self.front_panel.sync_control_value_from_model(
+                    "global_stop",
+                    False,
+                )
+                self.front_panel.redraw()
+
+            return
+
+        # Capture Reference is momentary in both Standard and Manual
+        # modes. Keep True until the runtime has actually completed
+        # one graph result with capture_wire=True; _apply_result()
+        # then returns the control to False automatically.
+        if bool(
+            values.get(
+                "capture_wire",
+                False,
+            )
+        ):
+
+            self._capture_reference_reset_pending = True
+
+            if self.controller.running:
+                self.controller.update_controls(
+                    values
+                )
+
+            return
 
         previous_motor = self._last_motor_control
 
@@ -2412,8 +2446,7 @@ class StudioApp(tk.Tk):
             return
 
         folder = (
-            Path.cwd()
-            / "measurement_exports"
+            measurement_exports_dir()
         )
 
         timestamp = (
@@ -2541,6 +2574,14 @@ class StudioApp(tk.Tk):
                     None,
                 )
 
+                # Capture Reference is operator-controlled and momentary.
+                # Do not let a stale runtime True repaint the indicator
+                # green for a second time after the capture completes.
+                panel_values.pop(
+                    "capture_wire",
+                    None,
+                )
+
                 self.front_panel.update_values(
                     panel_values
                 )
@@ -2550,6 +2591,33 @@ class StudioApp(tk.Tk):
                 self.front_panel.update_values(
                     result.values
                 )
+
+            # Capture Reference momentary reset:
+            # reset only after this completed runtime result proves
+            # that capture_wire=True was actually processed by the graph.
+            if (
+                self._capture_reference_reset_pending
+                and bool(
+                    result.values.get(
+                        "capture_wire",
+                        False,
+                    )
+                )
+            ):
+
+                self.front_panel.sync_control_value_from_model(
+                    "capture_wire",
+                    False,
+                )
+
+                self._capture_reference_reset_pending = False
+
+                if self.controller.running:
+                    self.controller.update_controls(
+                        self.front_panel.control_values()
+                    )
+
+                self.front_panel.redraw()
 
             # Spinning-drop normal completion:
             # when the final 6000-RPM stage is reached, keep the UI
@@ -2728,10 +2796,25 @@ class StudioApp(tk.Tk):
 
         if self.continuous:
 
-            self.stop()
+            self.stop_continuous()
             return
 
         self.continuous = True
+
+        # If Stop Continuous was used previously, the runtime is
+        # intentionally still alive so the camera can remain live.
+        # Re-enter Continuous mode without starting a second worker.
+        if self.controller.running:
+
+            self.run_button.configure(
+                text="Stop Continuous"
+            )
+
+            self.status_var.set(
+                "Continuous execution resumed"
+            )
+
+            return
 
         # Remove any stale UI result.
         self._latest_runtime_result = None
@@ -2753,14 +2836,70 @@ class StudioApp(tk.Tk):
         )
 
     # ============================================================
-    # STOP
+    # STOP CONTROL
+    # ============================================================
+
+    def _set_motor_stopped(
+        self,
+    ) -> None:
+
+        self._export_measurement_table()
+
+        if not self.front_panel:
+            self._last_motor_control = False
+            return
+
+        self.front_panel.sync_control_value_from_model(
+            "motor",
+            False,
+        )
+
+        self._last_motor_control = False
+
+        # Push Motor=False to the active runtime so the serial reader
+        # performs its normal STOP transition. During Stop Continuous
+        # the camera runtime intentionally remains alive.
+        if self.controller.running:
+
+            self.controller.update_controls(
+                self.front_panel.control_values()
+            )
+
+        self.front_panel.redraw()
+
+    def stop_continuous(
+        self,
+    ) -> None:
+
+        # Soft stop:
+        # motor/measurement STOP while camera stays connected/live.
+        self._set_motor_stopped()
+
+        self.continuous = False
+
+        # Intentionally do NOT cancel the RunController here.
+        self._latest_runtime_result = None
+
+        self.run_button.configure(
+            text="Continuous"
+        )
+
+        self.status_var.set(
+            "Continuous measurement stopped; camera remains live"
+        )
+
+    # ============================================================
+    # GLOBAL STOP
     # ============================================================
 
     def stop(
         self,
     ) -> None:
 
-        self._export_measurement_table()
+        # Global stop:
+        # motor STOP + Motor indicator STOP + terminate runtime.
+        # RunController cancellation closes camera/serial resources.
+        self._set_motor_stopped()
 
         self.continuous = False
 
@@ -2774,7 +2913,7 @@ class StudioApp(tk.Tk):
         )
 
         self.status_var.set(
-            "Execution stopped"
+            "Global execution stopped"
         )
 
     # ============================================================
@@ -4845,8 +4984,9 @@ class StudioApp(tk.Tk):
                 "Wire an output port to an input port. "
                 "Select a visual structure and use Open Structure "
                 "to edit its region.\n\n"
-                "F5 runs once, F6 runs continuously, and Stop requests "
-                "cooperative cancellation. Select a node for Breakpoint "
+                "F6 runs continuously. Stop performs a global stop, while "
+                "Stop Continuous stops the motor/measurement and keeps the camera live. "
+                "Select a node for Breakpoint "
                 "or a wire for Probe."
             ),
             parent=self,

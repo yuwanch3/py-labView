@@ -1416,7 +1416,7 @@
             },
             "extensions": {
               "role": "global_abort",
-              "binding_status": "visual parity only; RunController abort binding not implemented"
+              "binding_status": "active application-level Global Stop binding; stops motor and terminates runtime/camera/serial resources"
             }
           },
           {
@@ -1679,19 +1679,19 @@
             },
             "extensions": {
               "role": "manual target RPM input",
-              "binding_status": "stage 1 UI only; not wired to Arduino/runtime yet"
+              "binding_status": "wired to the dedicated Manual RPM reader target_rpm input"
             }
           }
         ],
         "extensions": {
           "hardware_basis": "TZ20002MG, 60W 12V 5A DC motor, BTS7960 HW-039, Arduino Uno clone, optical/IR pulse sensor disc (4 holes/rev)",
-          "serial_protocol_status": "Ground truth from lab Arduino firmware source (found on lab PC, 2026-08-21): PC sends START/STOP text commands; firmware replies ACK:START, ACK:STOP, ACK:AUTOSTOP_6000; streams RPM:<int>;PWM:<int>;TIME:<float>;TARGET:<int> every ~100ms and TARGET_RPM:<int> once per stage change. RPM is computed by the firmware (4 holes/revolution); the PC never computes RPM from raw pulses.",
-          "architecture_status": "The 6-stage RPM sequence (1000..6000, 3 min per stage, autostop after 3 min at 6000 RPM) runs entirely in the Arduino firmware. PyLabView Studio is a passive event listener: spinning_drop_stage_watcher appends one table row per firmware stage-completion event (5x TARGET_RPM + 1x ACK:AUTOSTOP_6000) and never times anything itself.",
+          "serial_protocol_status": "Manual protocol active: PC sends MODE:MANUAL, SET_TARGET:<rpm>, START, and STOP. Arduino replies ACK:MODE_MANUAL, ACK:TARGET:<rpm>, ACK:START, ACK:STOP, and TARGET_REACHED:<rpm>; telemetry remains RPM:<int>;PWM:<int>;TIME:<float>;TARGET:<int>. PWM/PID and soft-ramp remain controlled by Arduino.",
+          "architecture_status": "Manual RPM mode uses the dedicated arduino_manual_rpm_reader and spinning_drop_manual_watcher. The operator selects a target up to 6000 RPM; Arduino performs PID control and soft-ramp, and the watcher appends one table row when TARGET_REACHED:<rpm> is received. Manual mode does not use the Standard 1000..6000 automatic stage sequence or Standard autostop.",
           "time_fields_status": "TIME(s) displays show the firmware telemetry field TIME (seconds since the last TARGET_RPM change); the second display is a reserved duplicate.",
-          "stop_button_binding": "The red STOP button mirrors the original front panel visually; binding it to the application-level RunController abort is not implemented yet.",
-          "physical_validation": "not performed",
+          "stop_button_binding": "The red STOP button is bound to the application-level Global Stop and stops the motor while terminating runtime, camera, and serial resources.",
+          "physical_validation": "Manual Mode physically tested in source operation through at least 1000 and 1500 RPM; motor control, target-reached logging, capture, stop behavior, and Excel export were confirmed operational.",
           "density_template_status": "Density selector is active. Manual Δρ preserves the original direct-entry workflow. Template mode resolves Water=1000 kg/m3, Oil=850 kg/m3, or Custom manual densities, then supplies abs(density_1-density_2) to Vonnegut IFT and the measurement watcher.",
-          "manual_mode_status": "Stage 3A: Target RPM is wired to the dedicated Manual RPM reader. PWM remains PID-controlled by Arduino."
+          "manual_mode_status": "Manual Mode active and validated: Target RPM is wired to the dedicated Manual RPM reader, TARGET_REACHED drives the Manual watcher/table logging, and PWM remains PID-controlled by Arduino."
         }
       },
       "subdiagrams": {}
@@ -1700,8 +1700,8 @@
   "extensions": {
     "use_case": "Chemical EOR / petrophysics spinning-drop interfacial tension",
     "formula": "radius_m=diameter_mm/1000/2; omega=2*pi*rpm/60; gamma=delta_rho*omega^2*radius_m^3/4",
-    "physical_validation": "not performed",
+    "physical_validation": "Manual Mode physically tested in source operation through at least 1000 and 1500 RPM; motor control, target-reached logging, capture, stop behavior, and Excel export were confirmed operational.",
     "operating_mode": "manual_rpm",
-    "manual_mode_status": "Stage 3A: Manual project uses dedicated manual serial reader and manual watcher. Standard project remains separate and unchanged."
+    "manual_mode_status": "Manual project uses the dedicated manual serial reader and manual watcher. Manual Mode has been source-tested successfully, while the Standard project remains separate and unchanged."
   }
 }

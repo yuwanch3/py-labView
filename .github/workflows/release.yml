@@ -10,69 +10,6 @@ permissions:
   contents: write
 
 jobs:
-  build-windows-full:
-    needs: build-windows
-    runs-on: windows-latest
-    steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-      - name: Install full build profile
-        run: python -m pip install --upgrade pip && python -m pip install -r requirements-build.txt -r requirements-optional.txt
-      - name: Run tests
-        run: python -m unittest discover -s tests -v
-      - name: Source full-profile self-test
-        run: python -m pylabview --self-test-full
-      - name: Optional Yosys syntax validation
-        shell: pwsh
-        run: |
-          if (Get-Command yosys -ErrorAction SilentlyContinue) {
-            python -m unittest tests.test_platform_v4.HdlTests.test_export_passes_yosys_when_available -v
-          } else {
-            Write-Host "Yosys is not installed; HDL syntax validation skipped"
-          }
-      - name: Build full Windows executable
-        run: python -m PyInstaller --noconfirm --clean PyLabViewStudioFull.spec
-      - name: Frozen full-profile startup self-test
-        shell: pwsh
-        run: |
-          $process = Start-Process ".\dist\PyLabViewStudioFull.exe" -ArgumentList "--self-test-frozen" -PassThru
-          if (-not $process.WaitForExit(120000)) {
-            Stop-Process -Id $process.Id -Force
-            throw "Frozen full-profile startup self-test timed out"
-          }
-          if ($process.ExitCode -ne 0) {
-            throw "Frozen full-profile startup self-test failed with exit code $($process.ExitCode)"
-          }
-      - name: Create full-profile checksum
-        shell: pwsh
-        run: |
-          $hash = (Get-FileHash "dist/PyLabViewStudioFull.exe" -Algorithm SHA256).Hash.ToLower()
-          "$hash  PyLabViewStudioFull.exe" | Set-Content -Encoding ascii "dist/PyLabViewStudioFull.exe.sha256"
-      - name: Attach full profile to GitHub release
-        if: startsWith(github.ref, 'refs/tags/')
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: pwsh
-        run: |
-          gh release upload "${{ github.ref_name }}" `
-            "dist/PyLabViewStudioFull.exe" `
-            "dist/PyLabViewStudioFull.exe.sha256" `
-            --repo "${{ github.repository }}" `
-            --clobber
-      - name: Upload full-profile artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: PyLabViewStudio-Full-Windows-${{ github.ref_name }}
-          path: |
-            dist/PyLabViewStudioFull.exe
-            dist/PyLabViewStudioFull.exe.sha256
-          if-no-files-found: error
-
   build-windows:
     runs-on: windows-latest
 
@@ -86,11 +23,14 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - name: Install build tools
-        run: python -m pip install --upgrade pip && python -m pip install -r requirements-build.txt
+      - name: Install full build profile
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements-build.txt -r requirements-optional.txt
 
       - name: Run tests
         run: python -m unittest discover -s tests -v
+
+      - name: Source full-profile self-test
+        run: python -m pylabview --self-test-full
 
       - name: Optional Yosys syntax validation
         shell: pwsh
@@ -102,7 +42,7 @@ jobs:
           }
 
       - name: Build Windows executable
-        run: python -m PyInstaller --noconfirm --clean PyLabViewStudio.spec
+        run: python -m PyInstaller --noconfirm --clean PyLabViewStudioFull.spec
 
       - name: Verify executable
         shell: pwsh
@@ -112,12 +52,16 @@ jobs:
           }
           Get-Item "dist/PyLabViewStudio.exe" | Format-List Name,Length,LastWriteTime
 
-      - name: Frozen self-test
+      - name: Frozen full-profile startup self-test
         shell: pwsh
         run: |
-          $process = Start-Process ".\dist\PyLabViewStudio.exe" -ArgumentList "--self-test" -Wait -PassThru
+          $process = Start-Process ".\dist\PyLabViewStudio.exe" -ArgumentList "--self-test-frozen" -PassThru
+          if (-not $process.WaitForExit(120000)) {
+            Stop-Process -Id $process.Id -Force
+            throw "Frozen full-profile startup self-test timed out"
+          }
           if ($process.ExitCode -ne 0) {
-            throw "Frozen self-test failed with exit code $($process.ExitCode)"
+            throw "Frozen full-profile startup self-test failed with exit code $($process.ExitCode)"
           }
 
       - name: Create checksum

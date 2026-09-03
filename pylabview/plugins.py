@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from importlib import metadata
 from typing import Any, Callable
 
+from . import __version__
 from .model import NODE_DEFINITIONS, NodeDefinition
 
 
@@ -30,7 +31,9 @@ class PluginRegistry:
     def __init__(self) -> None:
         self.node_definitions: dict[str, NodeDefinition] = dict(NODE_DEFINITIONS)
         self.evaluators: dict[str, Callable[..., Any]] = {}
-        self.statuses: list[PluginStatus] = [PluginStatus("builtin", "4.3.4", "active")]
+        self.statuses: list[PluginStatus] = [
+            PluginStatus("builtin", __version__, "active")
+        ]
         self.isolated_evaluators: dict[str, tuple[Callable[[Any], Any], float]] = {}
         self._discovered = False
 

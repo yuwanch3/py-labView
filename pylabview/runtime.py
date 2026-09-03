@@ -20,6 +20,7 @@ from .integrations.serial_adapter import SerialAdapter
 from .integrations.visa_adapter import VisaAdapter
 from .integrations.vision_adapter import VisionAdapter
 from .handlers import BUILTIN_HANDLERS, HandlerContext, HandlerRegistry
+from .paths import user_data_root
 
 if TYPE_CHECKING:
     from .plugins import PluginRegistry
@@ -58,7 +59,11 @@ class DataflowRuntime:
         if max_sync_workers < 1:
             raise ValueError("max_sync_workers must be positive")
         self.max_sync_workers = max_sync_workers
-        self.data_root = Path(data_root or Path.cwd()).resolve()
+        self.data_root = Path(
+            data_root
+            if data_root is not None
+            else user_data_root()
+        ).resolve()
         self.drivers = drivers or DriverRegistry.with_simulation(self.rng)
         self.visa = visa or VisaAdapter()
         self.opcua = opcua or OpcUaAdapter()

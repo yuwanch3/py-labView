@@ -9,6 +9,6 @@ if errorlevel 1 exit /b 1
 py -3 -m PyInstaller --noconfirm --clean PyLabViewStudioFull.spec
 if errorlevel 1 exit /b 1
 
-echo Full build selesai: dist\PyLabViewStudioFull.exe
+echo Build selesai: dist\PyLabViewStudio.exe
 echo NI-DAQmx tetap memerlukan driver/runtime vendor NI terpisah.
 endlocal

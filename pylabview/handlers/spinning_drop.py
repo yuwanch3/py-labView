@@ -4,9 +4,9 @@ import math
 import re
 
 from datetime import datetime
-from pathlib import Path
 
 from ..execution import CancelledError
+from ..paths import captures_dir
 from ..typesystem import ErrorCluster
 from .api import HandlerContext
 from .registry import BUILTIN_HANDLERS as registry
@@ -987,7 +987,7 @@ def camera_capture_dual_mode(
         Every new Reference snapshot captured by the operator is also
         saved automatically into:
 
-            <project working directory>/captures/
+            Documents/GMJ PyLabView/Captures/
 
         Example filename:
 
@@ -1126,8 +1126,7 @@ def camera_capture_dual_mode(
             if stage_rpm is not None:
 
                 capture_folder = (
-                    Path.cwd()
-                    / "captures"
+                    captures_dir()
                 )
 
                 capture_folder.mkdir(
@@ -1308,8 +1307,7 @@ def camera_capture_dual_mode(
             # ====================================================
 
             capture_folder = (
-                Path.cwd()
-                / "captures"
+                captures_dir()
             )
 
             capture_folder.mkdir(
