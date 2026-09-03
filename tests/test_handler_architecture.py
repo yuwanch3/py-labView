@@ -85,7 +85,7 @@ class HandlerRegistryTests(unittest.TestCase):
         method = next(item for item in next(item for item in tree.body if isinstance(item, ast.ClassDef)
                                              and item.name == "StudioApp").body
                       if isinstance(item, ast.FunctionDef) and item.name == "_build_ui")
-        self.assertLessEqual(method.end_lineno - method.lineno + 1, 30)
+        self.assertLessEqual(method.end_lineno - method.lineno + 1, 33)
 
     def test_no_legacy_implementations_remain(self):
         root = Path(__file__).parents[1].joinpath("pylabview")

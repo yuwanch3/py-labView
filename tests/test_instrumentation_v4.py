@@ -243,6 +243,9 @@ class ShapePayload:
         for value in shape: elements *= value
         self.nbytes = elements * itemsize if nbytes is None else nbytes
 
+    def copy(self):
+        return ShapePayload(self.shape, self.dtype.name, self.dtype.itemsize, self.nbytes)
+
 
 class FakeCapture:
     def __init__(self): self.released = False
@@ -272,7 +275,11 @@ class VisionTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             path = Path(directory) / "x.png"; path.write_bytes(b"fake")
             self.assertEqual(self.vision.read(path).width, 20)
-    def test_capture_releases_camera(self): self.vision.capture(0); self.assertTrue(self.cv2.capture.released)
+    def test_capture_worker_releases_camera_explicitly(self):
+        self.vision.capture(0)
+        self.assertFalse(self.cv2.capture.released)
+        self.vision.release_all_captures()
+        self.assertTrue(self.cv2.capture.released)
     def test_grayscale_metadata(self): self.assertEqual(self.vision.grayscale(self.frame).channels, 1)
     def test_blur_kernel_validation(self):
         with self.assertRaises(ValueError): self.vision.blur(self.frame, 4)

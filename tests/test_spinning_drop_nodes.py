@@ -5,6 +5,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import math
 import unittest
+import numpy as np
 
 from pylabview.execution import RunSession
 from pylabview.panel_widgets import gauge_fraction, image_to_ppm, next_dropdown_value, table_rows
@@ -66,14 +67,26 @@ class Matrix:
     def tolist(self):
         return [list(row) for row in self.rows]
 
+    def copy(self):
+        return Matrix(self.tolist())
+
 
 class EdgeCv2:
     THRESH_BINARY = 1
+    THRESH_BINARY_INV = 2
+
+    @staticmethod
+    def GaussianBlur(payload, kernel, sigma):
+        return np.asarray(payload.tolist(), dtype=np.uint8).copy()
 
     @staticmethod
     def threshold(payload, threshold, maximum, mode):
+        rows = payload.tolist()
+        if mode == EdgeCv2.THRESH_BINARY_INV:
+            return threshold, Matrix([[maximum if value <= threshold else 0 for value in row]
+                                      for row in rows])
         return threshold, Matrix([[maximum if value > threshold else 0 for value in row]
-                                  for row in payload.tolist()])
+                                  for row in rows])
 
 
 class Capture:
@@ -84,7 +97,11 @@ class Capture:
         return True
 
     def read(self):
-        return True, Matrix([[255, 10, 10, 255], [255, 10, 10, 255]])
+        rows = [[255 for _ in range(100)] for _ in range(100)]
+        for y in range(40, 60):
+            for x in range(40, 60):
+                rows[y][x] = 10
+        return True, Matrix(rows)
 
     def release(self):
         self.released = True
@@ -94,12 +111,17 @@ class CaptureCv2(EdgeCv2):
     def __init__(self):
         self.sources = []
         self.captures = []
+        self.saved_paths = []
 
     def VideoCapture(self, source):
         self.sources.append(source)
         capture = Capture()
         self.captures.append(capture)
         return capture
+
+    def imwrite(self, path, payload):
+        self.saved_paths.append(str(path))
+        return True
 
 
 def watcher_inputs(**overrides):
@@ -167,10 +189,11 @@ class SpinningDropNodeTests(unittest.TestCase):
         self.assertTrue(fourth["autostop"])
         fifth = self.reader_pass(runtime, session)
         self.assertFalse(fifth["autostop"], "autostop must be true for exactly one tick")
-        # falling edge sends STOP exactly once and tolerates the ACK
+        # Firmware autostop already marks the run stopped. Selecting STOP
+        # acknowledges the completed run without sending a redundant STOP.
         sixth = self.reader_pass(runtime, session, run=False)
         self.assertEqual(stream.writes.count(b"START\n"), 1)
-        self.assertIn(b"STOP\n", stream.writes)
+        self.assertNotIn(b"STOP\n", stream.writes)
         self.assertFalse(sixth["error"].status)
 
     def test_garbage_and_partial_lines_are_tolerated(self):
@@ -276,7 +299,9 @@ class SpinningDropNodeTests(unittest.TestCase):
             self.assertEqual(result["table_data"][-1][0], float(target - 1000),
                              "row must record the PREVIOUS stage's RPM")
         final = self.watch_pass(session, autostop=True)
-        self.assertEqual(final["state"], "AWAITING_STOP")
+        self.assertEqual(final["state"], "MAX_RPM_REACHED")
+        self.assertTrue(final["error"].status)
+        self.assertEqual(final["error"].code, 68)
         self.assertEqual(len(final["table_data"]) - 1, 6, "autostop completes the 6th row")
         self.assertEqual([row[0] for row in final["table_data"][1:]],
                          [1000.0, 2000.0, 3000.0, 4000.0, 5000.0, 6000.0])
@@ -307,15 +332,20 @@ class SpinningDropNodeTests(unittest.TestCase):
         self.assertEqual(len(result["table_data"]), 1,
                          "no internal timer may ever produce a row")
 
-    def test_watcher_resets_on_stop(self):
+    def test_watcher_holds_table_on_stop_and_resets_on_new_run(self):
         session = RunSession(resources=ResourceManager())
         self.watch_pass(session)
         stopped = self.watch_pass(session, autostop=True)
         self.assertEqual(len(stopped["table_data"]) - 1, 1, "implicit 1000 stage completed by autostop")
-        reset = self.watch_pass(session, run=False)
-        self.assertEqual(reset["state"], "IDLE")
-        self.assertEqual(reset["table_data"],
-                         [["RPM", "Dia (px)", "Dia (mm)", "kg/m3", "w²", "r³", "IFT N/m", "IFT mN/m"]])
+        held = self.watch_pass(session, run=False)
+        self.assertEqual(held["state"], "IDLE")
+        self.assertEqual(held["table_data"], stopped["table_data"],
+                         "STOP must preserve the completed measurement table")
+        restarted = self.watch_pass(session, run=True)
+        self.assertEqual(restarted["state"], "RUNNING")
+        self.assertEqual(restarted["table_data"],
+                         [["RPM", "Dia (px)", "Dia (mm)", "kg/m3", "w²", "r³", "IFT N/m", "IFT mN/m"]],
+                         "a new run starts with a fresh measurement table")
 
     def test_watcher_error_states_halt_until_manual_stop(self):
         session = RunSession(resources=ResourceManager())
@@ -375,14 +405,21 @@ class SpinningDropNodeTests(unittest.TestCase):
             self.evaluate("wire_calibration", {"diameter_px": 40, "known_wire_diameter_mm": 0})
 
     def test_edge_profile_detects_dark_region_in_both_orientations(self):
-        matrix = Matrix([[255, 10, 10, 255], [255, 10, 10, 255]])
-        frame = ImageFrame(matrix, 4, 2, 1)
-        vision = VisionAdapter(EdgeCv2(), object())
+        rows = [[255 for _ in range(100)] for _ in range(100)]
+        for y in range(40, 60):
+            for x in range(40, 60):
+                rows[y][x] = 10
+        matrix = Matrix(rows)
+        frame = ImageFrame(matrix, 100, 100, 1)
+        vision = VisionAdapter(EdgeCv2(), np)
+
         horizontal = vision.edge_intensity_profile(frame, "horizontal", 127, "dark")
-        self.assertEqual(horizontal["intensity_profile"], [255.0, 10.0, 10.0, 255.0])
-        self.assertEqual(horizontal["diameter_px"], 2.0)
+        self.assertEqual(len(horizontal["intensity_profile"]), 80)
+        self.assertEqual(horizontal["diameter_px"], 20.0)
+
         vertical = vision.edge_intensity_profile(frame, "vertical", 200, "dark")
-        self.assertEqual(vertical["diameter_px"], 2.0)
+        self.assertEqual(len(vertical["intensity_profile"]), 80)
+        self.assertEqual(vertical["diameter_px"], 20.0)
 
     def test_camera_dual_mode_passes_index_or_url_to_opencv(self):
         cv2 = CaptureCv2()
@@ -390,6 +427,9 @@ class SpinningDropNodeTests(unittest.TestCase):
         vision.capture_source("usb", 2, "http://unused.invalid/video", 1)
         vision.capture_source("network", 0, "http://192.168.1.5:4747/video", 1)
         self.assertEqual(cv2.sources, [2, "http://192.168.1.5:4747/video"])
+        self.assertTrue(all(not capture.released for capture in cv2.captures),
+                        "latest-frame workers keep their camera open while active")
+        vision.release_all_captures()
         self.assertTrue(all(capture.released for capture in cv2.captures))
 
     def camera_pass(self, runtime, session, trigger, node_id="cam"):
@@ -401,18 +441,31 @@ class SpinningDropNodeTests(unittest.TestCase):
     def test_camera_capture_is_trigger_held_and_distinct_per_node(self):
         session = RunSession(resources=ResourceManager())
         cv2 = CaptureCv2()
-        runtime = DataflowRuntime(vision=VisionAdapter(cv2, object()))
-        self.assertIsNone(self.camera_pass(runtime, session, False),
-                          "untriggered staged capture must not grab before operator acts")
+        vision = VisionAdapter(cv2, object())
+        runtime = DataflowRuntime(vision=vision)
+
+        bootstrap = self.camera_pass(runtime, session, False)
+        self.assertIsNotNone(bootstrap,
+                             "snapshot mode bootstraps one frame for downstream vision")
+        self.assertEqual(len(cv2.captures), 1)
+
         first = self.camera_pass(runtime, session, True)
         self.assertIsNotNone(first)
-        self.assertEqual(len(cv2.captures), 1)
+        self.assertIsNot(first, bootstrap,
+                         "a rising edge refreshes the held reference frame")
+        self.assertEqual(len(cv2.captures), 1,
+                         "the same source reuses one persistent latest-frame worker")
+
         held = self.camera_pass(runtime, session, False)
-        self.assertIs(held, first, "held trigger reuses the frame, no silent re-grab")
+        self.assertIs(held, first, "released trigger holds the captured reference frame")
         self.assertEqual(len(cv2.captures), 1)
-        live = self.camera_pass(runtime, session, True)
-        self.assertEqual(len(cv2.captures), 2)
-        self.assertIsNot(live, first, "each trigger grabs a genuinely new frame")
+
+        second = self.camera_pass(runtime, session, True)
+        self.assertIsNot(second, first, "the next rising edge refreshes the reference again")
+        self.assertEqual(len(cv2.captures), 1)
+
+        vision.release_all_captures()
+        self.assertTrue(all(capture.released for capture in cv2.captures))
         session.close()
 
     def test_spinning_drop_panel_gauge_and_table_helpers(self):
@@ -469,11 +522,14 @@ class SpinningDropNodeTests(unittest.TestCase):
                                   b"RPM:1000;PWM:42;TIME:0.500;TARGET:1000\n"])
         with TemporaryDirectory() as directory:
             runtime = DataflowRuntime(serial=SerialAdapter(ArduinoBackend(stream)),
-                                      vision=VisionAdapter(CaptureCv2(), object()),
+                                      vision=VisionAdapter(CaptureCv2(), np),
                                       data_root=directory)
             # wire-comparison capture is operator-triggered; enable it for this run
-            controls = {node.id: True for node in project.main.graph.nodes.values()
-                        if node.type == "boolean_constant" and node.id in ("capture_oil", "capture_wire")}
+            controls = {
+                "capture_oil": True,
+                "capture_wire": True,
+                "density_input": 57.0,
+            }
             result = runtime.run(project.main.graph, controls, project, project.main_vi)
             self.assertFalse(any("Cycle detected" in error for error in result.errors))
             self.assertFalse(any("missing input" in error for error in result.errors))
