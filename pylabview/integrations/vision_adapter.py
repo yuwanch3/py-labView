@@ -32,6 +32,8 @@ class ImageFrame:
     width: int
     height: int
     channels: int
+    captured_at: float | None = None
+    frame_sequence: int | None = None
 
     def __post_init__(self) -> None:
 
@@ -140,11 +142,22 @@ class _CameraWorker:
         self.cv2 = cv2
         self.source = source
 
+        # Network streams (DroidCam/HTTP/RTSP) use a freshness-first
+        # strategy. USB cameras keep the original read() behaviour.
+        self.is_network_source = isinstance(
+            source,
+            str,
+        )
+        self.network_grab_count = 3
+
         self.capture: Any = None
 
         self.frame_lock = Lock()
 
         self.latest_frame: Any = None
+        self.latest_frame_captured_at: float | None = None
+        self.latest_frame_sequence: int | None = None
+        self._frame_sequence = 0
         self.last_error: Exception | None = None
 
         self.stop_event = Event()
@@ -212,9 +225,55 @@ class _CameraWorker:
 
             while not self.stop_event.is_set():
 
-                ok, payload = (
-                    self.capture.read()
-                )
+                # Network camera / DroidCam:
+                # discard a few queued frames, then retrieve the
+                # freshest available frame.
+                #
+                # USB cameras retain the original capture.read().
+                if (
+                    self.is_network_source
+                    and hasattr(
+                        self.capture,
+                        "grab",
+                    )
+                    and hasattr(
+                        self.capture,
+                        "retrieve",
+                    )
+                ):
+
+                    ok = True
+
+                    for _ in range(
+                        self.network_grab_count
+                    ):
+
+                        if self.stop_event.is_set():
+                            ok = False
+                            break
+
+                        ok = self.capture.grab()
+
+                        if not ok:
+                            break
+
+                    if ok:
+
+                        ok, payload = (
+                            self.capture.retrieve()
+                        )
+
+                    else:
+
+                        payload = None
+
+                else:
+
+                    # USB cameras and lightweight/mock capture
+                    # backends keep the original read() path.
+                    ok, payload = (
+                        self.capture.read()
+                    )
 
                 if (
                     not ok
@@ -238,6 +297,11 @@ class _CameraWorker:
                     self.latest_frame = (
                         payload.copy()
                     )
+
+                    # Diagnostic metadata only.
+                    self._frame_sequence += 1
+                    self.latest_frame_sequence = self._frame_sequence
+                    self.latest_frame_captured_at = time.monotonic()
 
                     self.last_error = None
 
@@ -263,7 +327,7 @@ class _CameraWorker:
     def get_frame(
         self,
         timeout: float,
-    ) -> Any:
+    ) -> tuple[Any, float | None, int | None]:
 
         if not self.frame_ready.wait(
             timeout
@@ -277,7 +341,9 @@ class _CameraWorker:
             if self.latest_frame is not None:
 
                 return (
-                    self.latest_frame.copy()
+                    self.latest_frame.copy(),
+                    self.latest_frame_captured_at,
+                    self.latest_frame_sequence,
                 )
 
         if self.last_error is not None:
@@ -293,17 +359,32 @@ class _CameraWorker:
 
         self.stop_event.set()
 
-        if self.capture is not None:
+        # Prefer letting the worker leave grab/read/retrieve and
+        # release VideoCapture from its own thread. Releasing a live
+        # FFmpeg capture concurrently can trigger native assertions.
+        if (
+            self.thread is not None
+            and self.thread.is_alive()
+        ):
+
+            try:
+                self.thread.join(
+                    timeout=1.0
+                )
+            except Exception:
+                pass
+
+        # Fallback only if the worker did not stop in time.
+        if (
+            self.thread is not None
+            and self.thread.is_alive()
+            and self.capture is not None
+        ):
 
             try:
                 self.capture.release()
             except Exception:
                 pass
-
-        if (
-            self.thread is not None
-            and self.thread.is_alive()
-        ):
 
             try:
                 self.thread.join(
@@ -369,6 +450,8 @@ class VisionAdapter:
     @staticmethod
     def _frame(
         payload: Any,
+        captured_at: float | None = None,
+        frame_sequence: int | None = None,
     ) -> ImageFrame:
 
         shape = getattr(
@@ -406,6 +489,8 @@ class VisionAdapter:
             width,
             height,
             channels,
+            captured_at,
+            frame_sequence,
         )
 
     @staticmethod
@@ -602,12 +687,18 @@ class VisionAdapter:
                 )
             )
 
-            payload = worker.get_frame(
+            (
+                payload,
+                captured_at,
+                frame_sequence,
+            ) = worker.get_frame(
                 timeout
             )
 
             return self._frame(
-                payload
+                payload,
+                captured_at,
+                frame_sequence,
             )
 
         # ========================================================
@@ -637,12 +728,18 @@ class VisionAdapter:
             )
         )
 
-        payload = worker.get_frame(
+        (
+            payload,
+            captured_at,
+            frame_sequence,
+        ) = worker.get_frame(
             timeout
         )
 
         return self._frame(
-            payload
+            payload,
+            captured_at,
+            frame_sequence,
         )
 
     def capture_source(

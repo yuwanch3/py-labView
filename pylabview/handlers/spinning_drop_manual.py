@@ -17,6 +17,9 @@ _TARGET_REACHED = re.compile(
     r"TARGET_REACHED:(\d+)"
 )
 
+_GRADUAL_STOP_REQUEST_KEY = "spinning-drop-gradual-stop-requested"
+_GRADUAL_STOP_COMPLETE_KEY = "spinning-drop-gradual-stop-complete"
+
 
 def _hold_state_key(
     context: HandlerContext,
@@ -108,12 +111,21 @@ def arduino_manual_rpm_reader(
             "elapsed": 0.0,
             "target": 0.0,
             "target_reached_latched": None,
+            "soft_stop_acknowledged": False,
+            "soft_stop_last_sent": None,
         },
     )
 
     try:
         run = bool(
             context.inputs["run"]
+        )
+
+        soft_stop_requested = bool(
+            context.session.state.get(
+                _GRADUAL_STOP_REQUEST_KEY,
+                False,
+            )
         )
 
         requested_target = float(
@@ -149,7 +161,15 @@ def arduino_manual_rpm_reader(
 
         context.session.state[
             _hold_state_key(context)
-        ] = not run
+        ] = (
+            not run
+            or bool(
+                context.session.state.get(
+                    _GRADUAL_STOP_COMPLETE_KEY,
+                    False,
+                )
+            )
+        )
 
         maximum = int(
             context.node.properties.get(
@@ -322,6 +342,27 @@ def arduino_manual_rpm_reader(
                 state["running"] = True
                 continue
 
+            if text == "ACK:SOFT_STOP":
+                state["soft_stop_acknowledged"] = True
+                state["target_reached_latched"] = None
+                continue
+
+            if text == "ACK:SOFT_STOP_COMPLETE":
+                state["running"] = False
+                state["start_pending"] = False
+                state["soft_stop_acknowledged"] = True
+                state["target_reached_latched"] = None
+
+                context.session.state[
+                    _GRADUAL_STOP_COMPLETE_KEY
+                ] = True
+
+                context.session.state[
+                    _hold_state_key(context)
+                ] = True
+
+                continue
+
             if text == "ACK:STOP":
                 state["running"] = False
                 state["start_pending"] = False
@@ -345,10 +386,40 @@ def arduino_manual_rpm_reader(
                 >= retry_seconds
             )
 
+        # Gradual stop uses the same active serial session but leaves
+        # run=True until firmware confirms RPM has reached the stopped band.
+        if (
+            soft_stop_requested
+            and run
+            and not bool(
+                context.session.state.get(
+                    _GRADUAL_STOP_COMPLETE_KEY,
+                    False,
+                )
+            )
+            and not state["soft_stop_acknowledged"]
+            and ready_to_retry(
+                state["soft_stop_last_sent"]
+            )
+        ):
+            command = b"SOFT_STOP\n"
+
+            if int(
+                connection.write(
+                    command
+                )
+            ) != len(command):
+                raise OSError(
+                    "incomplete SOFT_STOP command write"
+                )
+
+            state["soft_stop_last_sent"] = now
+
         # Arduino UNO can reset when COM opens. Keep retrying MODE
         # until the board explicitly confirms Manual mode.
         if (
-            not state["mode_confirmed"]
+            not soft_stop_requested
+            and not state["mode_confirmed"]
             and ready_to_retry(
                 state["mode_last_sent"]
             )
@@ -368,7 +439,8 @@ def arduino_manual_rpm_reader(
 
         # Never send SET_TARGET before Manual mode is confirmed.
         if (
-            state["mode_confirmed"]
+            not soft_stop_requested
+            and state["mode_confirmed"]
             and state["target_confirmed"]
             != rounded_target
             and rounded_target > 0
@@ -396,6 +468,7 @@ def arduino_manual_rpm_reader(
         # START is intentionally gated by BOTH ACKs.
         if (
             run
+            and not soft_stop_requested
             and state["mode_confirmed"]
             and state["target_confirmed"]
             == rounded_target

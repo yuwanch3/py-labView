@@ -19,26 +19,80 @@ def table_rows(value: Any) -> list[list[Any]]:
 
 
 def next_dropdown_value(value: Any, options: Any) -> str:
-    if not isinstance(options, list) or not options or any(not isinstance(option, str) for option in options):
+    if not isinstance(options, list) or not options or any(
+        not isinstance(option, str) for option in options
+    ):
         raise ValueError("dropdown options must be a non-empty string list")
+
     try:
         return options[(options.index(str(value)) + 1) % len(options)]
     except ValueError:
         return options[0]
 
 
-def image_to_ppm(frame: ImageFrame, max_pixels: int = 1_000_000) -> bytes:
+def image_to_ppm(
+    frame: ImageFrame,
+    max_pixels: int = 1_000_000,
+) -> bytes:
     if not isinstance(frame, ImageFrame):
         raise TypeError("thumbnail source must be an ImageFrame")
-    dtype = getattr(frame.payload, "dtype", None)
+
+    payload = frame.payload
+
+    dtype = getattr(payload, "dtype", None)
+
     if str(getattr(dtype, "name", dtype)) != "uint8":
         raise ValueError("front-panel thumbnails require uint8 images")
+
     if frame.width * frame.height > max_pixels:
         raise ValueError("front-panel thumbnail source exceeds processing bound")
-    rows = frame.payload.tolist()
+
+    # Fast path for real NumPy/OpenCV camera frames.
+    if hasattr(payload, "tobytes"):
+        if frame.channels == 1:
+            header = (
+                f"P5\n{frame.width} {frame.height}\n255\n"
+            ).encode("ascii")
+
+            return header + payload.tobytes()
+
+        if frame.channels == 3:
+            header = (
+                f"P6\n{frame.width} {frame.height}\n255\n"
+            ).encode("ascii")
+
+            return header + payload[:, :, ::-1].tobytes()
+
+    # Compatibility fallback for Matrix/mock payloads used by tests.
+    rows = payload.tolist()
+
     if frame.channels == 1:
-        data = bytes(int(value) for row in rows for value in row)
-        return f"P5\n{frame.width} {frame.height}\n255\n".encode("ascii") + data
-    data = bytes(int(channel) for row in rows for pixel in row
-                 for channel in (pixel[2], pixel[1], pixel[0]))
-    return f"P6\n{frame.width} {frame.height}\n255\n".encode("ascii") + data
+        data = bytes(
+            int(value)
+            for row in rows
+            for value in row
+        )
+
+        return (
+            f"P5\n{frame.width} {frame.height}\n255\n"
+        ).encode("ascii") + data
+
+    if frame.channels == 3:
+        data = bytes(
+            int(channel)
+            for row in rows
+            for pixel in row
+            for channel in (
+                pixel[2],
+                pixel[1],
+                pixel[0],
+            )
+        )
+
+        return (
+            f"P6\n{frame.width} {frame.height}\n255\n"
+        ).encode("ascii") + data
+
+    raise ValueError(
+        f"unsupported channel count: {frame.channels}"
+    )

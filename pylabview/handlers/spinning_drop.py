@@ -28,6 +28,9 @@ _TARGET_EVENT = re.compile(
     r"TARGET_RPM:(\d+)"
 )
 
+_GRADUAL_STOP_REQUEST_KEY = "spinning-drop-gradual-stop-requested"
+_GRADUAL_STOP_COMPLETE_KEY = "spinning-drop-gradual-stop-complete"
+
 
 def _hold_state_key(
     context: HandlerContext,
@@ -158,6 +161,8 @@ def arduino_telemetry_reader(
             "pwm": 0.0,
             "elapsed": 0.0,
             "target": 0.0,
+            "soft_stop_acknowledged": False,
+            "soft_stop_last_sent": None,
         },
     )
 
@@ -165,6 +170,13 @@ def arduino_telemetry_reader(
 
         run = bool(
             context.inputs["run"]
+        )
+
+        soft_stop_requested = bool(
+            context.session.state.get(
+                _GRADUAL_STOP_REQUEST_KEY,
+                False,
+            )
         )
 
         max_rpm_reached = bool(
@@ -288,6 +300,7 @@ def arduino_telemetry_reader(
 
         if (
             run
+            and not soft_stop_requested
             and not max_rpm_reached
             and not state["running"]
             and not state["start_pending"]
@@ -313,6 +326,45 @@ def arduino_telemetry_reader(
             state[
                 "start_pending"
             ] = True
+
+        # ========================================================
+        # SOFT / GRADUAL STOP
+        # ========================================================
+        # Arduino owns the ramp-down. Retry until ACK so this remains
+        # robust to a transiently missed command without changing serial
+        # adapter behavior.
+        if (
+            soft_stop_requested
+            and run
+            and not bool(
+                context.session.state.get(
+                    _GRADUAL_STOP_COMPLETE_KEY,
+                    False,
+                )
+            )
+        ):
+            now = context.runtime.clock()
+            last_sent = state["soft_stop_last_sent"]
+
+            if (
+                not state["soft_stop_acknowledged"]
+                and (
+                    last_sent is None
+                    or now - float(last_sent) >= 1.0
+                )
+            ):
+                command = b"SOFT_STOP\n"
+
+                if int(
+                    connection.write(
+                        command
+                    )
+                ) != len(command):
+                    raise OSError(
+                        "incomplete SOFT_STOP command write"
+                    )
+
+                state["soft_stop_last_sent"] = now
 
         # ========================================================
         # STOP
@@ -410,7 +462,8 @@ def arduino_telemetry_reader(
                 # completed state BEFORE accepting the zero packet so
                 # the last valid 6000-RPM telemetry remains visible.
                 if (
-                    previous_target >= 6000.0
+                    not soft_stop_requested
+                    and previous_target >= 6000.0
                     and new_target == 0.0
                 ):
                     autostop = True
@@ -435,7 +488,8 @@ def arduino_telemetry_reader(
                 # The firmware normally emits a dedicated
                 # TARGET_RPM:<rpm> line on every stage change.
                 if (
-                    previous_target > 0.0
+                    not soft_stop_requested
+                    and previous_target > 0.0
                     and new_target > 0.0
                     and new_target != previous_target
                 ):
@@ -461,7 +515,8 @@ def arduino_telemetry_reader(
                     match.group(1)
                 )
 
-                stage_changed = True
+                if not soft_stop_requested:
+                    stage_changed = True
 
                 continue
 
@@ -469,6 +524,25 @@ def arduino_telemetry_reader(
 
                 state["start_pending"] = False
                 state["running"] = True
+
+                continue
+
+            if text == "ACK:SOFT_STOP":
+                state["soft_stop_acknowledged"] = True
+                continue
+
+            if text == "ACK:SOFT_STOP_COMPLETE":
+                state["running"] = False
+                state["start_pending"] = False
+                state["soft_stop_acknowledged"] = True
+
+                context.session.state[
+                    _GRADUAL_STOP_COMPLETE_KEY
+                ] = True
+
+                context.session.state[
+                    _hold_state_key(context)
+                ] = True
 
                 continue
 

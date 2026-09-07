@@ -64,6 +64,9 @@ class DiagramCanvas(tk.Canvas):
         self.redraw()
 
     def set_statuses(self, statuses: dict[str, str]) -> None:
+        if statuses == self.statuses:
+            return
+
         self.statuses = statuses
         self.redraw()
 

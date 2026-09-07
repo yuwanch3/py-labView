@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import copy
 import json
 import time
@@ -123,6 +121,23 @@ class StudioApp(tk.Tk):
         # True trigger before returning the control to False.
         self._capture_reference_reset_pending = False
 
+        # Global STOP momentary reset:
+        # keep the Front Panel STOP indicator active until the
+        # RunController worker has actually finished shutting down.
+        self._global_stop_reset_pending = False
+
+        # Visual-only hold for the Front Panel Global STOP indicator.
+        # This NEVER delays the actual motor/runtime stop. It only keeps
+        # the red indicator visible long enough for the operator to see it.
+        self._global_stop_indicator_started_at = 0.0
+        self._global_stop_indicator_min_visible_s = 0.120
+
+        # Gradual Stop toolbar state.
+        # The motor ramp-down itself is performed entirely by Arduino.
+        self._gradual_stop_in_progress = False
+        self._gradual_stop_request_key = "spinning-drop-gradual-stop-requested"
+        self._gradual_stop_complete_key = "spinning-drop-gradual-stop-complete"
+
         # ========================================================
         # RUNTIME UI REFRESH CONTROL
         # ========================================================
@@ -143,7 +158,7 @@ class StudioApp(tk.Tk):
         # Untuk spinning-drop ini cukup untuk tahap stabilisasi.
         # Nanti kalau sudah lancar bisa dinaikkan menjadi 0.10
         # untuk sekitar 10 FPS.
-        self._runtime_ui_interval = 0.077
+        self._runtime_ui_interval = 0.060
 
         self.operating_mode: str | None = None
         self._startup_screen: StartupScreen | None = None
@@ -610,6 +625,10 @@ class StudioApp(tk.Tk):
             (
                 "Stop",
                 self.stop,
+            ),
+            (
+                "Stop Bertahap",
+                self.stop_gradually,
             ),
             (
                 "Front Panel",
@@ -1546,23 +1565,30 @@ class StudioApp(tk.Tk):
         ],
     ) -> None:
 
-        # Front Panel red STOP:
-        # same application-level GLOBAL STOP as the toolbar Stop button.
-        # Reset the momentary control immediately after handling it.
+        # Front Panel Global STOP is momentary.
+        #
+        # The actual stop request is issued immediately. After that request
+        # has been sent, flush pending Tk drawing work so the already-redrawn
+        # Global STOP control becomes visible even when shutdown is extremely
+        # fast. The small minimum-visible interval is UI-only and never delays
+        # motor/runtime shutdown.
         if bool(
             values.get(
                 "global_stop",
                 False,
             )
         ):
+            self._global_stop_reset_pending = True
+            self._global_stop_indicator_started_at = time.monotonic()
+
+            # Keep the existing global-stop path exactly as-is.
             self.stop()
 
+            # _press() and _set_motor_stopped() have already redrawn the
+            # Front Panel with global_stop=True. Force Tk to paint that state
+            # now instead of waiting for the event handler to return.
             if self.front_panel:
-                self.front_panel.sync_control_value_from_model(
-                    "global_stop",
-                    False,
-                )
-                self.front_panel.redraw()
+                self.front_panel.update_idletasks()
 
             return
 
@@ -2531,6 +2557,7 @@ class StudioApp(tk.Tk):
                 self.breakpoints
                 or self.probes
             ),
+            interval=0.060,
             breakpoints=self.breakpoints,
             probes=self.probes,
         )
@@ -2745,6 +2772,55 @@ class StudioApp(tk.Tk):
             )
 
         # ========================================================
+        # GRADUAL STOP COMPLETION
+        # ========================================================
+        # Arduino owns the soft ramp. Keep runtime alive while RPM ramps
+        # down so telemetry remains available. Once firmware confirms the
+        # motor has actually stopped, perform the existing global stop.
+        if self._gradual_stop_in_progress:
+            session = self.controller.session
+
+            gradual_complete = bool(
+                session is not None
+                and session.state.get(
+                    self._gradual_stop_complete_key,
+                    False,
+                )
+            )
+
+            if gradual_complete:
+                self._gradual_stop_in_progress = False
+                self.stop()
+                self.status_var.set(
+                    "Gradual stop completed; global execution stopped"
+                )
+
+        # ========================================================
+        # GLOBAL STOP MOMENTARY RESET
+        # ========================================================
+        # A Front Panel Global STOP click remains visibly active until
+        # RunController.running becomes False, which means the worker thread
+        # has exited and its finally block has closed runtime resources.
+        if (
+            self._global_stop_reset_pending
+            and not self.controller.running
+            and (
+                time.monotonic()
+                - self._global_stop_indicator_started_at
+            )
+            >= self._global_stop_indicator_min_visible_s
+        ):
+            if self.front_panel:
+                self.front_panel.sync_control_value_from_model(
+                    "global_stop",
+                    False,
+                )
+                self.front_panel.redraw()
+
+            self._global_stop_reset_pending = False
+            self._global_stop_indicator_started_at = 0.0
+
+        # ========================================================
         # Front Panel refresh throttling
         # ========================================================
 
@@ -2780,9 +2856,12 @@ class StudioApp(tk.Tk):
                 result
             )
 
-        # Poll queue frequently so buttons remain responsive.
+        # Poll queue frequently so the 77 ms Front Panel target is not
+        # quantized by a coarse 30 ms scheduler step. The previous 30 ms
+        # polling could turn a nominal 77 ms UI interval into roughly
+        # 90-110+ ms in practice once redraw time was included.
         self.after(
-            30,
+            10,
             self._poll_runtime,
         )
 
@@ -2889,12 +2968,79 @@ class StudioApp(tk.Tk):
         )
 
     # ============================================================
+    # GRADUAL STOP
+    # ============================================================
+
+    def stop_gradually(
+        self,
+    ) -> None:
+
+        # If execution is already stopped, there is nothing to ramp.
+        if not self.controller.running:
+            self.status_var.set(
+                "Execution is not running"
+            )
+            return
+
+        # If the motor is already STOP, no ramp is needed. Finish with
+        # the existing global stop so camera/serial resources close too.
+        motor_running = bool(
+            self.front_panel
+            and self.front_panel.values.get(
+                "motor",
+                False,
+            )
+        )
+
+        if not motor_running:
+            self.stop()
+            self.status_var.set(
+                "Motor already stopped; global execution stopped"
+            )
+            return
+
+        if self._gradual_stop_in_progress:
+            self.status_var.set(
+                "Gradual stop already in progress"
+            )
+            return
+
+        session = self.controller.session
+
+        if session is None:
+            self.status_var.set(
+                "Gradual stop unavailable: runtime session is not active"
+            )
+            return
+
+        # Do NOT set Motor=False here. Keeping run=True prevents the
+        # existing handlers from issuing the immediate STOP command.
+        # The handler sees this session request and sends SOFT_STOP instead.
+        session.state[
+            self._gradual_stop_request_key
+        ] = True
+
+        session.state[
+            self._gradual_stop_complete_key
+        ] = False
+
+        self._gradual_stop_in_progress = True
+
+        self.status_var.set(
+            "Gradual stop requested; RPM is ramping down"
+        )
+
+    # ============================================================
     # GLOBAL STOP
     # ============================================================
 
     def stop(
         self,
     ) -> None:
+
+        # Hard/global STOP always wins, including while a gradual stop
+        # is in progress. Cancellation safe-stop still sends STOP.
+        self._gradual_stop_in_progress = False
 
         # Global stop:
         # motor STOP + Motor indicator STOP + terminate runtime.

@@ -31,6 +31,41 @@ class PanelDesigner(tk.Canvas):
         self.values: dict[str, Any] = {}
         self.chart_history: dict[str, list[float]] = {}
         self._image_refs: dict[str, tk.PhotoImage] = {}
+
+        # Operate-mode live Picture Oil optimization.
+        #
+        # The live oil image gets its own persistent Canvas image item so a
+        # full Front Panel redraw does not have to destroy/recreate that image
+        # object on every runtime refresh. Other image indicators keep their
+        # existing behaviour for now.
+        self._persistent_image_refs: dict[str, tk.PhotoImage] = {}
+        self._persistent_image_items: dict[str, int] = {}
+        self._persistent_image_sources: dict[str, ImageFrame] = {}
+
+        # Operate-mode table cache. Measurement rows usually change only
+        # when a stage is completed, not on every live camera refresh.
+        self._persistent_table_signatures: dict[str, tuple[tuple[str, ...], ...]] = {}
+        self._persistent_table_scaled = False
+
+        # Operate-mode persistent rendering for five explicitly selected,
+        # non-safety Front Panel widgets only:
+        # RPM ACT, PWM ACT, WIFI IP / Camera URL, TIME(s) #1, TIME(s) #2.
+        #
+        # These Canvas items survive normal runtime redraws. Their displayed
+        # text is updated only when its formatted value changes.
+        self._fast_display_node_ids = {
+            "rpm_display",
+            "pwm_display",
+            "time_display_1",
+            "time_display_2",
+            "wifi",
+            "wifi_ip",
+        }
+        self._persistent_fast_display_tags: dict[str, str] = {}
+        self._persistent_fast_display_text_items: dict[str, int] = {}
+        self._persistent_fast_display_values: dict[str, str] = {}
+        self._persistent_fast_display_scaled = False
+
         self._drag: tuple[str, float, float, dict[str, float], bool] | None = None
         self._open_dropdown_id: str | None = None
         self.bind("<Button-1>", self._press)
@@ -54,6 +89,22 @@ class PanelDesigner(tk.Canvas):
         if graph is not self.graph:
             self.values.clear()
             self.chart_history.clear()
+
+        self.delete("persistent_image")
+        self._persistent_image_refs.clear()
+        self._persistent_image_items.clear()
+        self._persistent_image_sources.clear()
+
+        self.delete("persistent_table")
+        self._persistent_table_signatures.clear()
+        self._persistent_table_scaled = False
+
+        self.delete("persistent_fast_display")
+        self._persistent_fast_display_tags.clear()
+        self._persistent_fast_display_text_items.clear()
+        self._persistent_fast_display_values.clear()
+        self._persistent_fast_display_scaled = False
+
         self.graph = graph
         self.panel = _normalized_panel(panel, graph)
         self.selected_id = None
@@ -73,6 +124,23 @@ class PanelDesigner(tk.Canvas):
         self.mode = mode
         self.selected_id = None
         self._open_dropdown_id = None
+
+        if mode == "edit":
+            self.delete("persistent_image")
+            self._persistent_image_refs.clear()
+            self._persistent_image_items.clear()
+            self._persistent_image_sources.clear()
+
+            self.delete("persistent_table")
+            self._persistent_table_signatures.clear()
+            self._persistent_table_scaled = False
+
+            self.delete("persistent_fast_display")
+            self._persistent_fast_display_tags.clear()
+            self._persistent_fast_display_text_items.clear()
+            self._persistent_fast_display_values.clear()
+            self._persistent_fast_display_scaled = False
+
         self.redraw()
 
     def _initialize_values(self) -> None:
@@ -102,28 +170,510 @@ class PanelDesigner(tk.Canvas):
 
     def update_values(self, values: dict[str, Any]) -> None:
         self.values.update(values)
+
         for item in self.panel["items"]:
             node_id = item["terminal_node_id"]
             if item["kind"] == "chart" and node_id in values:
                 limit = int(self.graph.nodes[node_id].properties.get("history", 100))
                 self.chart_history[node_id] = update_chart_history(
                     self.chart_history.get(node_id, []), values[node_id], limit)
+
+        # Picture Oil is the high-frequency live camera indicator.
+        oil_picture = values.get("oil_picture")
+
+        if (
+            self.mode == "operate"
+            and isinstance(oil_picture, ImageFrame)
+        ):
+            self._update_persistent_picture(
+                "oil_picture",
+                oil_picture,
+            )
+
+        # Picture Comparison is normally frozen. Keep it persistent too,
+        # but rebuild its PhotoImage only when the ImageFrame object changes.
+        wire_picture = values.get("wire_picture")
+
+        if (
+            self.mode == "operate"
+            and isinstance(wire_picture, ImageFrame)
+        ):
+            wire_item = self._image_item_for_node(
+                "wire_picture"
+            )
+
+            if wire_item is not None:
+                previous_source = self._persistent_image_sources.get(
+                    wire_item["id"]
+                )
+
+                if previous_source is not wire_picture:
+                    self._update_persistent_picture(
+                        "wire_picture",
+                        wire_picture,
+                    )
+
+        if (
+            self.mode == "operate"
+            and "table_display" in values
+        ):
+            self._update_persistent_table(
+                "table_display",
+                self.values.get("table_display"),
+            )
+
         self.redraw()
 
+    def _is_fast_display_item(
+        self,
+        item: dict[str, Any],
+    ) -> bool:
+        return (
+            self.mode == "operate"
+            and item["terminal_node_id"] in self._fast_display_node_ids
+        )
+
+    def _update_persistent_fast_display(
+        self,
+        item: dict[str, Any],
+    ) -> bool:
+        """Create/update one of the five requested persistent display widgets."""
+
+        if not self._is_fast_display_item(
+            item
+        ):
+            return False
+
+        item_id = item["id"]
+        node_id = item["terminal_node_id"]
+        bounds = item["bounds"]
+        x = bounds["x"]
+        y = bounds["y"]
+        w = bounds["width"]
+        h = bounds["height"]
+        label = item["properties"].get(
+            "label",
+            item["kind"].replace("_", " ").title(),
+        )
+
+        value = self.values.get(
+            node_id,
+            "--",
+        )
+        value = self._display_value(
+            node_id,
+            value,
+        )
+        displayed = self._format(
+            value
+        )
+
+        persistent_tag = f"persistent_fast_display:{item_id}"
+        panel_tag = f"panel:{item_id}"
+
+        if item_id not in self._persistent_fast_display_tags:
+            self.create_rectangle(
+                x,
+                y,
+                x + w,
+                y + h,
+                fill="#f7f7f7",
+                outline="#777",
+                width=1,
+                tags=(
+                    "persistent_fast_display",
+                    persistent_tag,
+                    panel_tag,
+                ),
+            )
+
+            self.create_text(
+                x + 8,
+                y + 10,
+                text=label,
+                anchor="w",
+                font=self._font(
+                    9,
+                    bold=True,
+                ),
+                tags=(
+                    "persistent_fast_display",
+                    persistent_tag,
+                    panel_tag,
+                ),
+            )
+
+            if node_id in {"wifi", "wifi_ip"}:
+                text_item = self.create_text(
+                    x + 10,
+                    y + h / 2 + 10,
+                    text=displayed,
+                    anchor="w",
+                    justify="left",
+                    width=max(
+                        w - 20,
+                        20,
+                    ),
+                    font=self._font(
+                        10,
+                        family="TkFixedFont",
+                        bold=True,
+                    ),
+                    tags=(
+                        "persistent_fast_display",
+                        persistent_tag,
+                        panel_tag,
+                    ),
+                )
+            else:
+                text_item = self.create_text(
+                    x + w / 2,
+                    y + h / 2 + 10,
+                    text=displayed,
+                    fill="#000000",
+                    font=self._font(
+                        13,
+                        family="TkFixedFont",
+                        bold=True,
+                    ),
+                    tags=(
+                        "persistent_fast_display",
+                        persistent_tag,
+                        panel_tag,
+                    ),
+                )
+
+            self._persistent_fast_display_tags[item_id] = persistent_tag
+            self._persistent_fast_display_text_items[item_id] = text_item
+            self._persistent_fast_display_values[item_id] = displayed
+
+            return True
+
+        if (
+            self._persistent_fast_display_values.get(
+                item_id
+            )
+            != displayed
+        ):
+            text_item = self._persistent_fast_display_text_items.get(
+                item_id
+            )
+
+            if text_item is not None:
+                self.itemconfigure(
+                    text_item,
+                    text=displayed,
+                )
+
+            self._persistent_fast_display_values[item_id] = displayed
+
+        return True
+
+    def _image_item_for_node(
+        self,
+        node_id: str,
+    ) -> dict[str, Any] | None:
+        return next(
+            (
+                entry
+                for entry in self.panel["items"]
+                if (
+                    entry["kind"] == "image_indicator"
+                    and entry["terminal_node_id"] == node_id
+                )
+            ),
+            None,
+        )
+
+    def _update_persistent_picture(
+        self,
+        node_id: str,
+        value: ImageFrame,
+    ) -> bool:
+        """Update a persistent image indicator without rebuilding its Canvas item."""
+
+        item = self._image_item_for_node(
+            node_id
+        )
+
+        if item is None:
+            return False
+
+        bounds = item["bounds"]
+        x = bounds["x"]
+        y = bounds["y"]
+        w = bounds["width"]
+        h = bounds["height"]
+        tag = f"panel:{item['id']}"
+
+        try:
+            image = tk.PhotoImage(
+                data=image_to_ppm(value),
+                format="PPM",
+            )
+
+            scale = max(
+                1,
+                math.ceil(
+                    max(
+                        image.width()
+                        / max((w - 12) * self.zoom, 1),
+                        image.height()
+                        / max((h - 30) * self.zoom, 1),
+                    )
+                ),
+            )
+
+            if scale > 1:
+                image = image.subsample(
+                    scale,
+                    scale,
+                )
+
+            self._persistent_image_refs[item["id"]] = image
+            self._persistent_image_sources[item["id"]] = value
+
+            canvas_image_id = self._persistent_image_items.get(
+                item["id"]
+            )
+
+            if canvas_image_id is None:
+                canvas_image_id = self.create_image(
+                    x + w / 2,
+                    y + h / 2 + 10,
+                    image=image,
+                    tags=("persistent_image", tag),
+                )
+                self._persistent_image_items[item["id"]] = canvas_image_id
+            else:
+                self.coords(
+                    canvas_image_id,
+                    x + w / 2,
+                    y + h / 2 + 10,
+                )
+                self.itemconfigure(
+                    canvas_image_id,
+                    image=image,
+                )
+
+            self.tag_raise(
+                canvas_image_id
+            )
+
+            return True
+
+        except (TypeError, ValueError, tk.TclError):
+            return False
+
+    def _table_item_for_node(
+        self,
+        node_id: str,
+    ) -> dict[str, Any] | None:
+        return next(
+            (
+                entry
+                for entry in self.panel["items"]
+                if (
+                    entry["properties"].get("display_type") == "table"
+                    and entry["terminal_node_id"] == node_id
+                )
+            ),
+            None,
+        )
+
+    def _table_signature(
+        self,
+        value: Any,
+    ) -> tuple[tuple[str, ...], ...]:
+        rows = table_rows(
+            value
+        )
+        return tuple(
+            tuple(
+                self._format(cell)
+                for cell in row
+            )
+            for row in rows
+        )
+
+    def _update_persistent_table(
+        self,
+        node_id: str,
+        value: Any,
+    ) -> bool:
+        """Rebuild a persistent table only when its displayed content changes."""
+
+        item = self._table_item_for_node(
+            node_id
+        )
+
+        if item is None:
+            return False
+
+        signature = self._table_signature(
+            value
+        )
+
+        item_id = item["id"]
+
+        if (
+            self._persistent_table_signatures.get(item_id)
+            == signature
+        ):
+            return True
+
+        table_tag = f"persistent_table:{item_id}"
+
+        self.delete(
+            table_tag
+        )
+
+        rows = table_rows(
+            value
+        )
+
+        if rows:
+            bounds = item["bounds"]
+            x = bounds["x"]
+            y = bounds["y"]
+            w = bounds["width"]
+            h = bounds["height"]
+
+            columns = max(
+                len(row)
+                for row in rows
+            )
+            cell_w = (w - 12) / max(columns, 1)
+            cell_h = min(
+                28,
+                (h - 28) / max(len(rows), 1),
+            )
+
+            for row_index, row in enumerate(
+                rows[:10]
+            ):
+                for column_index, cell in enumerate(
+                    row
+                ):
+                    x0 = x + 6 + column_index * cell_w
+                    y0 = y + 24 + row_index * cell_h
+
+                    self.create_rectangle(
+                        x0,
+                        y0,
+                        x0 + cell_w,
+                        y0 + cell_h,
+                        outline="#aaa",
+                        tags=(
+                            "persistent_table",
+                            table_tag,
+                        ),
+                    )
+
+                    self.create_text(
+                        x0 + cell_w / 2,
+                        y0 + cell_h / 2,
+                        text=self._format(cell)[:16],
+                        font=self._font(
+                            8,
+                            family="TkFixedFont",
+                        ),
+                        tags=(
+                            "persistent_table",
+                            table_tag,
+                        ),
+                    )
+
+        self._persistent_table_signatures[item_id] = signature
+        self._persistent_table_scaled = False
+
+        self.tag_raise(
+            "persistent_table"
+        )
+
+        return True
+
     def redraw(self) -> None:
-        self.delete("all")
+        # Persistent table items survive redraw(). If the canvas is zoomed,
+        # they were already scaled by the previous redraw. Restore them to
+        # document coordinates first so the global zoom below is applied
+        # exactly once instead of compounding on every refresh.
+        if (
+            self.zoom != 1.0
+            and self._persistent_table_scaled
+        ):
+            self.scale(
+                "persistent_table",
+                0,
+                0,
+                1.0 / self.zoom,
+                1.0 / self.zoom,
+            )
+            self._persistent_table_scaled = False
+
+        # Persistent fast-display items also survive redraw(). If the canvas
+        # is zoomed, they were already scaled by the previous redraw. Restore
+        # them to document coordinates first so zoom is applied exactly once
+        # instead of compounding on every click/runtime refresh.
+        if (
+            self.zoom != 1.0
+            and self._persistent_fast_display_scaled
+        ):
+            self.scale(
+                "persistent_fast_display",
+                0,
+                0,
+                1.0 / self.zoom,
+                1.0 / self.zoom,
+            )
+            self._persistent_fast_display_scaled = False
+
+        # Keep persistent live image Canvas items alive. The five explicitly
+        # selected fast-display widgets also survive normal Operate-mode
+        # redraws. Everything else keeps the existing redraw behaviour.
+        self.delete("panel_item")
+        self.delete("grid")
+        self.delete("dropdown_menu")
+        self.delete("resize")
         self._image_refs.clear()
+
         width, height = int(self.panel["canvas"]["width"]), int(self.panel["canvas"]["height"])
+
         if self.mode == "edit":
             for x in range(0, width + 1, self.grid_size):
                 self.create_line(x, 0, x, height, fill="#d3d3d3", tags="grid")
             for y in range(0, height + 1, self.grid_size):
                 self.create_line(0, y, width, y, fill="#d3d3d3", tags="grid")
+
         for item in sorted(self.panel["items"], key=lambda entry: entry["z_index"]):
-            self._draw_item(item)
+            if self._is_fast_display_item(
+                item
+            ):
+                self._update_persistent_fast_display(
+                    item
+                )
+            else:
+                self._draw_item(
+                    item
+                )
+
         if self.zoom != 1.0:
             self.scale("all", 0, 0, self.zoom, self.zoom)
-        self.configure(scrollregion=(0, 0, width * self.zoom, height * self.zoom))
+
+            if self.find_withtag("persistent_table"):
+                self._persistent_table_scaled = True
+
+            if self.find_withtag("persistent_fast_display"):
+                self._persistent_fast_display_scaled = True
+
+        self.configure(
+            scrollregion=(
+                0,
+                0,
+                width * self.zoom,
+                height * self.zoom,
+            )
+        )
 
     def _draw_item(self, item: dict[str, Any]) -> None:
         bounds = item["bounds"]
@@ -162,13 +712,75 @@ class PanelDesigner(tk.Canvas):
             )
         if kind == "image_indicator" and isinstance(value, ImageFrame):
             try:
-                image = tk.PhotoImage(data=image_to_ppm(value), format="PPM")
-                scale = max(1, math.ceil(max(image.width() / max((w - 12) * self.zoom, 1),
-                                             image.height() / max((h - 30) * self.zoom, 1))))
-                if scale > 1:
-                    image = image.subsample(scale, scale)
-                self._image_refs[item["id"]] = image
-                self.create_image(x + w / 2, y + h / 2 + 10, image=image, tags=("panel_item", tag))
+                if (
+                    self.mode == "operate"
+                    and node_id in {"oil_picture", "wire_picture"}
+                ):
+                    canvas_image_id = self._persistent_image_items.get(
+                        item["id"]
+                    )
+
+                    # Runtime update_values() refreshes Picture Oil every
+                    # incoming frame and Picture Comparison only when its
+                    # frozen ImageFrame changes. redraw() just reuses it.
+                    if canvas_image_id is None:
+                        if not self._update_persistent_picture(
+                            node_id,
+                            value,
+                        ):
+                            raise ValueError(
+                                f"unable to update {node_id}"
+                            )
+
+                        canvas_image_id = (
+                            self._persistent_image_items.get(
+                                item["id"]
+                            )
+                        )
+
+                    if canvas_image_id is not None:
+                        self.coords(
+                            canvas_image_id,
+                            x + w / 2,
+                            y + h / 2 + 10,
+                        )
+                        self.tag_raise(
+                            canvas_image_id
+                        )
+
+                else:
+                    image = tk.PhotoImage(
+                        data=image_to_ppm(value),
+                        format="PPM",
+                    )
+
+                    scale = max(
+                        1,
+                        math.ceil(
+                            max(
+                                image.width()
+                                / max((w - 12) * self.zoom, 1),
+                                image.height()
+                                / max((h - 30) * self.zoom, 1),
+                            )
+                        ),
+                    )
+
+                    if scale > 1:
+                        image = image.subsample(
+                            scale,
+                            scale,
+                        )
+
+                    self._image_refs[item["id"]] = image
+
+                    self.create_image(
+                        x + w / 2,
+                        y + h / 2 + 10,
+                        image=image,
+                        tags=("panel_item", tag),
+                    )
+
             except (TypeError, ValueError, tk.TclError):
                 self.create_text(x + w / 2, y + h / 2 + 10,
                                   text=f"Image {value.width} x {value.height} x {value.channels}",
@@ -191,18 +803,30 @@ class PanelDesigner(tk.Canvas):
             self.create_text(x + w / 2, bottom + 12, text=self._format(value),
                              font=self._font(10), tags=("panel_item", tag))
         elif display_type == "table":
-            rows = table_rows(value)
-            if rows:
-                columns = max(len(row) for row in rows)
-                cell_w = (w - 12) / max(columns, 1)
-                cell_h = min(28, (h - 28) / max(len(rows), 1))
-                for row_index, row in enumerate(rows[:10]):
-                    for column_index, cell in enumerate(row):
-                        x0, y0 = x + 6 + column_index * cell_w, y + 24 + row_index * cell_h
-                        self.create_rectangle(x0, y0, x0 + cell_w, y0 + cell_h, outline="#aaa",
-                                              tags=("panel_item", tag))
-                        self.create_text(x0 + cell_w / 2, y0 + cell_h / 2, text=self._format(cell)[:16],
-                                         font=self._font(8, family="TkFixedFont"), tags=("panel_item", tag))
+            if (
+                self.mode == "operate"
+                and node_id == "table_display"
+            ):
+                self._update_persistent_table(
+                    node_id,
+                    value,
+                )
+                self.tag_raise(
+                    "persistent_table"
+                )
+            else:
+                rows = table_rows(value)
+                if rows:
+                    columns = max(len(row) for row in rows)
+                    cell_w = (w - 12) / max(columns, 1)
+                    cell_h = min(28, (h - 28) / max(len(rows), 1))
+                    for row_index, row in enumerate(rows[:10]):
+                        for column_index, cell in enumerate(row):
+                            x0, y0 = x + 6 + column_index * cell_w, y + 24 + row_index * cell_h
+                            self.create_rectangle(x0, y0, x0 + cell_w, y0 + cell_h, outline="#aaa",
+                                                  tags=("panel_item", tag))
+                            self.create_text(x0 + cell_w / 2, y0 + cell_h / 2, text=self._format(cell)[:16],
+                                             font=self._font(8, family="TkFixedFont"), tags=("panel_item", tag))
         elif display_type == "dropdown" and kind == "string_control":
             field_left = x + 8
             field_top = y + h / 2 - 8
@@ -245,8 +869,17 @@ class PanelDesigner(tk.Canvas):
                                      tags=("dropdown_menu", tag))
         elif kind == "boolean_control" or (kind == "indicator" and isinstance(value, bool)):
             active = bool(value)
+
+            # Global STOP uses a red active indicator. Other boolean controls
+            # keep their existing green active / dark inactive appearance.
+            active_fill = (
+                "#d93025"
+                if node_id == "global_stop"
+                else "#35b85a"
+            )
+
             self.create_oval(x + w / 2 - 18, y + h / 2 - 10, x + w / 2 + 18, y + h / 2 + 26,
-                             fill="#35b85a" if active else "#555", outline="#222", tags=("panel_item", tag))
+                             fill=active_fill if active else "#555", outline="#222", tags=("panel_item", tag))
         elif kind == "chart":
             numbers = self.chart_history.get(node_id, [])
 
@@ -663,9 +1296,37 @@ class PanelDesigner(tk.Canvas):
         document_x = self.canvasx(x) / old_zoom
         document_y = self.canvasy(y) / old_zoom
         self.zoom = min(2.0, max(0.55, old_zoom * factor))
+
         if self.zoom == old_zoom:
             return "break"
+
+        # Persistent Picture Oil / Picture Comparison / Table are optimized
+        # for normal runtime refreshes and intentionally survive redraw().
+        # A zoom change is different: their image subsampling, font sizes,
+        # and geometry depend on the current zoom. Rebuild those persistent
+        # items once at the new zoom instead of reusing objects created at
+        # the previous scale.
+        #
+        # This happens only when the operator changes zoom, so it does not
+        # affect the live runtime performance optimization.
+        if hasattr(self, "delete"):
+            self.delete("persistent_image")
+            self._persistent_image_refs.clear()
+            self._persistent_image_items.clear()
+            self._persistent_image_sources.clear()
+
+            self.delete("persistent_table")
+            self._persistent_table_signatures.clear()
+            self._persistent_table_scaled = False
+
+            self.delete("persistent_fast_display")
+            self._persistent_fast_display_tags.clear()
+            self._persistent_fast_display_text_items.clear()
+            self._persistent_fast_display_values.clear()
+            self._persistent_fast_display_scaled = False
+
         self.redraw()
+
         width = max(float(self.panel["canvas"]["width"]) * self.zoom, 1.0)
         height = max(float(self.panel["canvas"]["height"]) * self.zoom, 1.0)
         self.xview_moveto(max(0.0, (document_x * self.zoom - x) / width))
