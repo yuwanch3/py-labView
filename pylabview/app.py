@@ -46,6 +46,8 @@ class StudioApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
 
+        self._set_app_icon()
+
         ensure_user_directories()
         copy_default_examples()
 
@@ -176,6 +178,37 @@ class StudioApp(tk.Tk):
             self._startup_logo_path(),
             self._complete_startup,
         )
+
+    # ============================================================
+    # APPLICATION ICON
+    # ============================================================
+
+    def _set_app_icon(self) -> None:
+        """Apply the GMJ icon to the root window and future Tk windows."""
+        icon_path = (
+            bundled_assets_dir()
+            / "gmj-icon.png"
+        )
+
+        if not icon_path.exists():
+            return
+
+        try:
+            # Keep a reference for the lifetime of the Tk application.
+            self._app_icon = tk.PhotoImage(
+                file=str(icon_path)
+            )
+
+            # default=True also applies this icon to future Toplevel windows,
+            # including the operating-mode selector.
+            self.iconphoto(
+                True,
+                self._app_icon,
+            )
+
+        except tk.TclError:
+            # Icon failure must never prevent the application from starting.
+            self._app_icon = None
 
     # ============================================================
     # STARTUP / MODE SELECTION
@@ -5164,6 +5197,18 @@ class StudioApp(tk.Tk):
 # ================================================================
 
 def main() -> None:
+
+    # Give Windows a stable application identity so the runtime taskbar
+    # icon groups under GMJ Global Energy instead of the Python host.
+    try:
+        import ctypes
+
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+            "GMJ.GlobalEnergy.PyLabViewStudio"
+        )
+
+    except (AttributeError, OSError):
+        pass
 
     app = StudioApp()
 

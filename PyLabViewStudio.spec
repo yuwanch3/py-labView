@@ -44,6 +44,7 @@ exe = EXE(
     upx=True,
     console=False,
     version=str(root / "version_info.txt"),
+    icon=str(root / "assets" / "gmj-icon.ico"),
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
