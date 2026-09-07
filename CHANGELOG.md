@@ -2,6 +2,48 @@
 
 All notable user-facing changes to PyLabView Studio are recorded here.
 
+## [7.9.0] - 2026-09-07
+
+### Added
+
+- Added **Stop Bertahap** to both Standard Mode and Manual RPM Mode.
+- Added firmware-side `SOFT_STOP` handling for gradual motor deceleration while preserving the existing immediate hard `STOP`.
+- Added GMJ application branding for the startup window, main application window, Windows taskbar, and packaged executable.
+- Added GMJ runtime PNG icon and Windows executable ICO asset.
+
+### Changed
+
+- Improved camera frame freshness by using the latest available network frame instead of allowing stale buffered frames to accumulate.
+- Improved serial telemetry responsiveness by reading only currently available serial bytes and preserving incomplete lines between reads.
+- Improved Front Panel runtime rendering for Picture Oil, Picture Comparison, tables, RPM, PWM, timers, and WIFI indicators.
+- Reduced unnecessary Front Panel status redraws when displayed status values have not changed.
+- Gradual stopping now remains firmware-owned so Python does not implement RPM ramp timing.
+- Manual RPM control preserves PID state correctly during active operation and gradual stopping.
+- Windows executable packaging now embeds the GMJ `.ico` resource through both PyInstaller build specifications.
+- Application, Windows file metadata, README, and architecture documentation were updated for release 7.9.0.
+
+### Fixed
+
+- Fixed Manual RPM PID reset behavior that could interfere with convergence to the requested target RPM.
+- Fixed excessive serial-read blocking that could cause approximately multi-second telemetry delay.
+- Fixed cumulative scaling behavior in persistent Front Panel elements during repeated zoom operations.
+- Fixed Front Panel zoom compatibility with viewport unit-test fakes.
+- Reduced stale camera-frame behavior during network/DroidCam operation.
+- Preserved immediate hard-stop behavior even when Stop Bertahap is already active.
+
+### Cleanup
+
+- Removed temporary runtime, camera, Front Panel, UI timing, and benchmark diagnostic logging from production application code.
+- Kept local benchmark tooling outside the tracked production source tree.
+
+### Validation
+
+- Full automated test suite passed with **275 tests**.
+- Standard Mode and Manual RPM Mode retained separate operating workflows.
+- Project schema remains version 3.
+- Existing schema-v3 projects remain compatible.
+- V1/v2 migration behavior remains unchanged.
+
 ## [7.8.3] - 2026-09-02
 
 ### Added
@@ -98,6 +140,7 @@ All notable user-facing changes to PyLabView Studio are recorded here.
 
 - Project schema remains version 3. Zoom and scroll position are UI-only state and do not modify or dirty persisted node or Front Panel coordinates.
 
+[7.9.0]: https://github.com/yuwanch3/py-labView/releases/tag/v7.9.0
 [7.8.3]: https://github.com/yuwanch3/py-labView/releases/tag/v7.8.3
 [4.3.4]: https://github.com/yuwanch3/py-labView/releases/tag/v4.3.4
 [4.3.3]: https://github.com/yuwanch3/py-labView/releases/tag/v4.3.3

@@ -1,4 +1,4 @@
-# Arsitektur PyLabView Studio 7.8.3
+# Arsitektur PyLabView Studio 7.9.0
 
 ## Boundaries
 
@@ -16,7 +16,7 @@
 
 - `handlers/spinning_drop_manual.py`: Manual RPM Mode domain handlers. The PC selects Manual Mode and sends the requested target RPM, while PWM remains controlled by the Arduino PID. The handler consumes the same bounded serial telemetry stream and the `TARGET_REACHED:<rpm>` event. Manual measurement rows are captured when the requested final target is reached; intermediate soft-ramp targets are not recorded as measurement stages.
 
-- The dual-mode Arduino protocol uses `MODE:STANDARD`, `MODE:MANUAL`, `SET_TARGET:<rpm>`, `START`, and `STOP` commands. Manual operation is bounded to 6000 RPM. Standard automatic sequencing and Manual target operation remain separate workflows while sharing telemetry and safety-oriented stop behavior.
+- The dual-mode Arduino protocol uses `MODE:STANDARD`, `MODE:MANUAL`, `SET_TARGET:<rpm>`, `START`, `SOFT_STOP`, and `STOP` commands. `SOFT_STOP` performs firmware-side gradual deceleration for Stop Bertahap, while `STOP` remains the immediate hard-stop command and takes precedence. Manual operation is bounded to 6000 RPM. Standard automatic sequencing and Manual target operation remain separate workflows while sharing telemetry and safety-oriented stop behavior.
 
 - `camera_capture_dual_mode` is trigger-held per node: the oil image can remain live while the staged reference/comparison node only re-captures on its operator action and otherwise preserves the previous frame. Capture Reference is momentary from the operator perspective: one activation captures/updates the reference and then returns to the inactive state. Error clusters remain explicit wires; invalid measurements cannot reach report generation.
 
@@ -60,7 +60,7 @@ Built-in definitions must have an explicit registered handler. A type absent fro
 
 ## Persistence
 
-Application release 7.8.3 deliberately keeps project schema version 3. New behavior is represented by node types, properties, handlers, and root/panel extension points, so no schema migration is required for the 7.8.3 application release.
+Application release 7.9.0 deliberately keeps project schema version 3. New behavior is represented by node types, properties, handlers, and root/panel extension points, so no schema migration is required for the 7.9.0 application release.
 
 V1/v2 projects continue to migrate to schema v3, and existing schema-v3 projects remain the persisted project format.
 
