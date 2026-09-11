@@ -1189,6 +1189,12 @@ def camera_capture_dual_mode(
         # until actual RPM is within ±100 RPM before capturing.
         if (
             telemetry_run
+            and not bool(
+                context.session.state.get(
+                    _GRADUAL_STOP_REQUEST_KEY,
+                    False,
+                )
+            )
             and not _manual_mode_active(
                 context
             )
