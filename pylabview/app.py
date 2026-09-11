@@ -1,5 +1,6 @@
-import copy
+
 import json
+import math
 import time
 import zipfile
 from datetime import datetime
@@ -37,7 +38,13 @@ from .paths import (
     bundled_examples_dir,
     copy_default_examples,
     ensure_user_directories,
-    measurement_exports_dir,
+    session_dir,
+    session_info_path,
+    session_analysis_dir,
+    session_analysis_rpm_dir,
+    session_measurements_dir,
+    session_reference_dir,
+    session_stages_dir,
 )
 
 
@@ -117,6 +124,7 @@ class StudioApp(tk.Tk):
         self._measurement_run_active = False
         self._measurement_exported = False
         self._last_motor_control = False
+        self._measurement_run_counter = 0
 
         # Capture Reference momentary reset:
         # wait until one runtime result has actually processed the
@@ -139,6 +147,16 @@ class StudioApp(tk.Tk):
         self._gradual_stop_in_progress = False
         self._gradual_stop_request_key = "spinning-drop-gradual-stop-requested"
         self._gradual_stop_complete_key = "spinning-drop-gradual-stop-complete"
+
+        # Pre-run readiness is intentionally UI/runtime-derived only.
+        # It never opens camera or serial resources by itself.
+        self._pre_run_camera_ready = False
+        self._pre_run_calibration_ready = False
+
+        # Hardware status dashboard state. This is display-only and reuses
+        # existing runtime/front-panel information; it never opens hardware.
+        self._hardware_camera_connected = False
+        self._hardware_arduino_connected = False
 
         # ========================================================
         # RUNTIME UI REFRESH CONTROL
@@ -164,6 +182,35 @@ class StudioApp(tk.Tk):
 
         self.operating_mode: str | None = None
         self._startup_screen: StartupScreen | None = None
+
+        # One application launch / selected operating mode = one session.
+        # paths.py owns path construction; app.py owns this lifecycle.
+        self.session_root: Path | None = None
+        self.session_id: str | None = None
+        self.session_started_at: str | None = None
+
+        # Analysis PNG optimization:
+        # freeze lightweight Front Panel data on the UI thread, then render
+        # and write PNG files in one background worker so runtime/UI refresh
+        # is not blocked by GDI drawing and PNG compression.
+        self._analysis_snapshot_jobs: Queue[
+            tuple[
+                dict[str, Any],
+                Path,
+            ]
+        ] = Queue()
+
+        self._analysis_snapshot_worker = Thread(
+            target=self._analysis_snapshot_worker_loop,
+            name="pylabview-analysis-snapshot",
+            daemon=True,
+        )
+
+        self._analysis_snapshot_worker.start()
+
+        # Display-only stage sample override.
+        # Calibration/reference data inside the runtime graph remains frozen.
+        self._stage_display_override_active = False
 
         self._build_style()
         self.withdraw()
@@ -268,6 +315,109 @@ class StudioApp(tk.Tk):
             project.migration_report
         )
 
+    def _create_session(
+        self,
+        mode: str,
+    ) -> None:
+        """
+        Create exactly one writable session folder for this app launch.
+
+        This stage only creates the session structure and basic metadata.
+        Existing capture/export workflows are intentionally NOT redirected
+        yet.
+        """
+
+        now = datetime.now()
+
+        mode_label = (
+            "Standard"
+            if mode == "standard"
+            else "Manual"
+        )
+
+        session_name = (
+            "Session_"
+            + now.strftime(
+                "%Y%m%d_%H%M%S"
+            )
+            + "_"
+            + mode_label
+        )
+
+        root = session_dir(
+            session_name
+        )
+
+        # A session must be unique to this application launch.
+        root.mkdir(
+            parents=True,
+            exist_ok=False,
+        )
+
+        # Create only the structural folders. Individual RPM folders
+        # are intentionally created later on demand.
+        session_reference_dir(
+            root
+        ).mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        session_stages_dir(
+            root
+        ).mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        session_analysis_dir(
+            root
+        ).mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        session_measurements_dir(
+            root
+        ).mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        started_at = now.strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+
+        metadata = {
+            "session_id": session_name,
+            "started_at": started_at,
+            "mode": mode_label,
+            "app_version": __version__,
+        }
+
+        session_info_path(
+            root
+        ).write_text(
+            json.dumps(
+                metadata,
+                indent=2,
+                ensure_ascii=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        self.session_root = root
+        self.session_id = session_name
+        self.session_started_at = started_at
+
+        # Expose the active application-owned session path to runtime
+        # handlers without changing graph controls or redirecting any
+        # existing output yet. spinning_drop.py will consume this in the
+        # next stage.
+        self.runtime.gmj_session_root = root
+        self.runtime.gmj_analysis_capture_requests = []
+
     def _complete_startup(self, mode: str) -> None:
         self.operating_mode = mode
         self._startup_screen = None
@@ -294,6 +444,23 @@ class StudioApp(tk.Tk):
             self.destroy()
             return
 
+        try:
+
+            self._create_session(
+                mode
+            )
+
+        except OSError as exc:
+
+            messagebox.showerror(
+                "Session setup failed",
+                str(exc),
+                parent=self,
+            )
+
+            self.destroy()
+            return
+
         self._build_menu()
         self._build_ui()
         self._bind_shortcuts()
@@ -311,9 +478,103 @@ class StudioApp(tk.Tk):
         self.deiconify()
         self.lift()
         self.focus_force()
+
+        # Ask after the main window has been laid out so the Panedwindow
+        # sash positions can be moved safely if the operator chooses Yes.
+        self.after(
+            80,
+            self._ask_collapse_workspace_panels,
+        )
+
         self.after(
             30,
             self._poll_runtime,
+        )
+
+    # ============================================================
+    # STARTUP WORKSPACE LAYOUT
+    # ============================================================
+
+    def _ask_collapse_workspace_panels(
+        self,
+    ) -> None:
+
+        collapse = messagebox.askyesno(
+            "Workspace Layout",
+            (
+                "Tutup semua panel samping dan bawah?\n\n"
+                "Yes = tutup Node Library, Properties, dan "
+                "Execution Log / Debugger Trace.\n"
+                "No = tetap tampil seperti biasa."
+            ),
+            parent=self,
+        )
+
+        if collapse:
+            self._collapse_workspace_panels()
+
+    def _collapse_workspace_panels(
+        self,
+    ) -> None:
+
+        work = getattr(
+            self,
+            "_work_panes",
+            None,
+        )
+
+        vertical = getattr(
+            self,
+            "_vertical_panes",
+            None,
+        )
+
+        if (
+            work is None
+            or vertical is None
+        ):
+            return
+
+        # Make sure geometry is current before moving the sashes.
+        self.update_idletasks()
+
+        work_width = max(
+            1,
+            work.winfo_width(),
+        )
+
+        vertical_height = max(
+            1,
+            vertical.winfo_height(),
+        )
+
+        try:
+            # Horizontal panes:
+            # sash 0 -> left Node Library to the far left.
+            # sash 1 -> right Properties to the far right.
+            work.sashpos(
+                0,
+                0,
+            )
+
+            work.sashpos(
+                1,
+                work_width,
+            )
+
+            # Vertical pane:
+            # sash 0 -> bottom console to the bottom edge.
+            vertical.sashpos(
+                0,
+                vertical_height,
+            )
+
+        except tk.TclError:
+            # Layout convenience must never prevent normal application use.
+            return
+
+        self.status_var.set(
+            "Workspace side and bottom panels collapsed"
         )
 
     # ============================================================
@@ -563,6 +824,7 @@ class StudioApp(tk.Tk):
     def _build_ui(self) -> None:
 
         self._build_toolbar()
+        self._build_hardware_status_dashboard()
 
         work, console = (
             self._build_panes()
@@ -724,6 +986,184 @@ class StudioApp(tk.Tk):
         )
 
     # ============================================================
+    # HARDWARE STATUS DASHBOARD
+    # ============================================================
+
+    def _build_hardware_status_dashboard(
+        self,
+    ) -> None:
+
+        frame = ttk.Frame(
+            self,
+            padding=(
+                8,
+                4,
+            ),
+        )
+
+        frame.pack(
+            fill="x",
+        )
+
+        ttk.Label(
+            frame,
+            text="Hardware Status:",
+            font=(
+                "TkDefaultFont",
+                9,
+                "bold",
+            ),
+        ).pack(
+            side="left",
+        )
+
+        self.hardware_camera_var = tk.StringVar(
+            value="Camera: Disconnected"
+        )
+
+        self.hardware_arduino_var = tk.StringVar(
+            value="Arduino: Disconnected"
+        )
+
+        self.hardware_com_var = tk.StringVar(
+            value="COM: --"
+        )
+
+        self.hardware_camera_source_var = tk.StringVar(
+            value="Camera Source: --"
+        )
+
+        for variable in (
+            self.hardware_camera_var,
+            self.hardware_arduino_var,
+            self.hardware_com_var,
+            self.hardware_camera_source_var,
+        ):
+            ttk.Label(
+                frame,
+                textvariable=variable,
+            ).pack(
+                side="left",
+                padx=(
+                    10,
+                    0,
+                ),
+            )
+
+        self._refresh_hardware_status_dashboard()
+
+    def _refresh_hardware_status_dashboard(
+        self,
+    ) -> None:
+
+        if not hasattr(
+            self,
+            "hardware_camera_var",
+        ):
+            return
+
+        controls = (
+            self.front_panel.control_values()
+            if self.front_panel
+            else {}
+        )
+
+        com_port = str(
+            controls.get(
+                "com",
+                "",
+            )
+        ).strip()
+
+        camera_mode = str(
+            controls.get(
+                "oil_mode",
+                "",
+            )
+        ).strip().lower()
+
+        if camera_mode == "network":
+            camera_source = str(
+                controls.get(
+                    "wifi",
+                    "",
+                )
+            ).strip()
+
+        elif camera_mode:
+            camera_source = (
+                "USB device "
+                + str(
+                    controls.get(
+                        "oil_source",
+                        "--",
+                    )
+                )
+            )
+
+        else:
+            camera_source = "--"
+
+        camera_text = (
+            "Camera: "
+            + (
+                "Connected"
+                if self._hardware_camera_connected
+                else "Disconnected"
+            )
+        )
+
+        arduino_text = (
+            "Arduino: "
+            + (
+                "Connected"
+                if self._hardware_arduino_connected
+                else "Disconnected"
+            )
+        )
+
+        com_text = (
+            "COM: "
+            + (
+                com_port
+                if com_port
+                else "--"
+            )
+        )
+
+        camera_source_text = (
+            "Camera Source: "
+            + (
+                camera_source
+                if camera_source
+                else "--"
+            )
+        )
+
+        if self.hardware_camera_var.get() != camera_text:
+            self.hardware_camera_var.set(
+                camera_text
+            )
+
+        if self.hardware_arduino_var.get() != arduino_text:
+            self.hardware_arduino_var.set(
+                arduino_text
+            )
+
+        if self.hardware_com_var.get() != com_text:
+            self.hardware_com_var.set(
+                com_text
+            )
+
+        if (
+            self.hardware_camera_source_var.get()
+            != camera_source_text
+        ):
+            self.hardware_camera_source_var.set(
+                camera_source_text
+            )
+
+    # ============================================================
     # PANES
     # ============================================================
 
@@ -734,6 +1174,8 @@ class StudioApp(tk.Tk):
             orient="vertical",
         )
 
+        self._vertical_panes = vertical
+
         vertical.pack(
             fill="both",
             expand=True,
@@ -743,6 +1185,8 @@ class StudioApp(tk.Tk):
             vertical,
             orient="horizontal",
         )
+
+        self._work_panes = work
 
         vertical.add(
             work,
@@ -1590,6 +2034,360 @@ class StudioApp(tk.Tk):
 
         self._update_title()
 
+    # ============================================================
+    # SPINNING-DROP PRE-RUN CHECKLIST
+    # ============================================================
+
+    @staticmethod
+    def _pre_run_positive_number(
+        value: Any,
+    ) -> bool:
+
+        try:
+            number = float(
+                value
+            )
+
+        except (
+            TypeError,
+            ValueError,
+        ):
+            return False
+
+        return (
+            math.isfinite(
+                number
+            )
+            and number > 0.0
+        )
+
+    def _spinning_drop_pre_run_check(
+        self,
+        values: dict[
+            str,
+            Any,
+        ],
+    ) -> bool:
+
+        if self.operating_mode not in (
+            "standard",
+            "manual",
+        ):
+            return True
+
+        checks: list[
+            tuple[
+                bool,
+                str,
+            ]
+        ] = []
+
+        run_graph = (
+            self.project.vis[
+                self.current_vi_id
+            ].graph
+        )
+
+        validation_errors = (
+            self.runtime.validate(
+                run_graph,
+                self.project,
+                self.current_vi_id,
+            )
+        )
+
+        checks.append(
+            (
+                not validation_errors,
+                "Project validation",
+            )
+        )
+
+        checks.append(
+            (
+                (
+                    self.controller.running
+                    and self.continuous
+                ),
+                "Continuous mode active",
+            )
+        )
+
+        com_port = str(
+            values.get(
+                "com",
+                "",
+            )
+        ).strip()
+
+        checks.append(
+            (
+                bool(
+                    com_port
+                ),
+                (
+                    (
+                        f"COM Arduino: {com_port} "
+                        "(recheck port in Windows Device Manager)"
+                    )
+                    if com_port
+                    else (
+                        "COM Arduino configured "
+                        "(recheck port in Windows Device Manager)"
+                    )
+                ),
+            )
+        )
+
+        camera_mode = str(
+            values.get(
+                "oil_mode",
+                "",
+            )
+        ).strip().lower()
+
+        camera_configured = bool(
+            camera_mode
+        )
+
+        if camera_mode == "network":
+            camera_configured = bool(
+                str(
+                    values.get(
+                        "wifi",
+                        "",
+                    )
+                ).strip()
+            )
+
+        elif camera_mode:
+            try:
+                camera_configured = (
+                    float(
+                        values.get(
+                            "oil_source",
+                            -1,
+                        )
+                    )
+                    >= 0.0
+                )
+            except (
+                TypeError,
+                ValueError,
+            ):
+                camera_configured = False
+
+        checks.append(
+            (
+                camera_configured,
+                "Camera configuration valid",
+            )
+        )
+
+        checks.append(
+            (
+                self._pre_run_camera_ready,
+                "Camera live frame available",
+            )
+        )
+
+        checks.append(
+            (
+                self._pre_run_positive_number(
+                    values.get(
+                        "wire_known"
+                    )
+                ),
+                "Known wire diameter valid",
+            )
+        )
+
+        checks.append(
+            (
+                self._pre_run_calibration_ready,
+                "Wire calibration / scale factor available",
+            )
+        )
+
+        density_mode = str(
+            values.get(
+                "density_mode",
+                "",
+            )
+        ).strip()
+
+        density_valid = False
+
+        if density_mode == "Manual Δρ":
+            density_valid = (
+                self._pre_run_positive_number(
+                    values.get(
+                        "density_input"
+                    )
+                )
+            )
+
+        elif density_mode == "Template":
+
+            templates = {
+                "Water": 1000.0,
+                "Oil": 850.0,
+            }
+
+            def resolved_density(
+                fluid_key: str,
+                value_key: str,
+            ) -> float | None:
+
+                fluid = str(
+                    values.get(
+                        fluid_key,
+                        "",
+                    )
+                ).strip()
+
+                if fluid in templates:
+                    return templates[
+                        fluid
+                    ]
+
+                if fluid != "Custom":
+                    return None
+
+                raw = values.get(
+                    value_key
+                )
+
+                if not self._pre_run_positive_number(
+                    raw
+                ):
+                    return None
+
+                return float(
+                    raw
+                )
+
+            density_1 = resolved_density(
+                "fluid_1",
+                "density_1",
+            )
+
+            density_2 = resolved_density(
+                "fluid_2",
+                "density_2",
+            )
+
+            density_valid = (
+                density_1 is not None
+                and density_2 is not None
+                and abs(
+                    density_1
+                    - density_2
+                ) > 0.0
+            )
+
+        checks.append(
+            (
+                density_valid,
+                "Density input valid",
+            )
+        )
+
+        if self.operating_mode == "manual":
+
+            try:
+                target_rpm = float(
+                    values.get(
+                        "manual_target_rpm",
+                        0.0,
+                    )
+                )
+
+                target_valid = (
+                    math.isfinite(
+                        target_rpm
+                    )
+                    and 0.0
+                    < target_rpm
+                    <= 6000.0
+                )
+
+            except (
+                TypeError,
+                ValueError,
+            ):
+                target_valid = False
+
+            checks.append(
+                (
+                    target_valid,
+                    "Manual Target RPM valid (1-6000)",
+                )
+            )
+
+        failed = [
+            label
+            for ok, label
+            in checks
+            if not ok
+        ]
+
+        if not failed:
+            self.status_var.set(
+                "Pre-run checklist passed"
+            )
+            return True
+
+        if self.front_panel:
+            self.front_panel.sync_control_value_from_model(
+                "motor",
+                False,
+            )
+
+            self._last_motor_control = False
+
+            if self.controller.running:
+                safe_values = dict(
+                    values
+                )
+
+                safe_values[
+                    "motor"
+                ] = False
+
+                self.controller.update_controls(
+                    safe_values
+                )
+
+            self.front_panel.redraw()
+
+        checklist_text = "\n".join(
+            (
+                "✓ "
+                if ok
+                else "✗ "
+            )
+            + label
+            for ok, label
+            in checks
+        )
+
+        self.status_var.set(
+            "Pre-run checklist failed"
+        )
+
+        messagebox.showwarning(
+            "Pre-Run Checklist",
+            (
+                checklist_text
+                + "\n\nMeasurement cannot start. "
+                "Correct the failed item(s) and try again."
+            ),
+            parent=self,
+        )
+
+        return False
+
     def _panel_values_changed(
         self,
         values: dict[
@@ -1597,6 +2395,8 @@ class StudioApp(tk.Tk):
             Any,
         ],
     ) -> None:
+
+        self._refresh_hardware_status_dashboard()
 
         # Front Panel Global STOP is momentary.
         #
@@ -1636,6 +2436,10 @@ class StudioApp(tk.Tk):
             )
         ):
 
+            # A new operator reference becomes visible again until the next
+            # automatic stage-sample burst starts.
+            self._stage_display_override_active = False
+
             self._capture_reference_reset_pending = True
 
             if self.controller.running:
@@ -1658,6 +2462,13 @@ class StudioApp(tk.Tk):
             current_motor
             and not previous_motor
         ):
+            if not self._spinning_drop_pre_run_check(
+                values
+            ):
+                return
+
+            self._stage_display_override_active = False
+
             self._measurement_run_active = True
             self._measurement_exported = False
 
@@ -2184,16 +2995,124 @@ class StudioApp(tk.Tk):
         return name
 
     @classmethod
-    def _write_simple_xlsx(
+    def _write_measurement_xlsx(
         cls,
-        rows: list[list[Any]],
+        summary_rows: list[list[Any]],
+        sample_rows: list[list[Any]],
+        statistics_rows: list[list[Any]],
         destination: Path,
+        *,
+        session_id: str | None,
+        mode_label: str,
     ) -> None:
+        """
+        Write one polished three-sheet spinning-drop workbook.
+
+        Styling is intentionally restrained:
+        - one dark title band
+        - one soft metadata row
+        - clear blue table headers
+        - light alternating data rows
+        - thin borders and practical column widths
+        """
+
+        exported_at = (
+            datetime.now()
+            .strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
+        )
+
+        session_text = (
+            session_id
+            if session_id
+            else "Legacy / no active session"
+        )
+
+        metadata_text = (
+            f"Session: {session_text}    |    "
+            f"Mode: {mode_label}    |    "
+            f"Exported: {exported_at}"
+        )
+
+        def number_format_id(
+            sheet_name: str,
+            column_index: int,
+        ) -> int:
+
+            if sheet_name == "Measurement Summary":
+                if column_index in (2,):
+                    return 4   # 0.000
+                if column_index in (3, 4):
+                    return 5   # 0.000000
+                if column_index in (5, 6, 7):
+                    return 6   # 0.000000E+00
+                if column_index in (8, 9):
+                    return 5   # 0.000000
+                if column_index == 10:
+                    return 7   # 0.00
+
+            elif sheet_name == "Stage Samples":
+                if column_index == 3:
+                    return 4
+                if column_index in (4, 5):
+                    return 5
+
+            elif sheet_name == "Statistics":
+                if column_index in (3, 4, 5, 6):
+                    return 4
+                if column_index == 7:
+                    return 7
+
+            return 0
+
+        def style_id(
+            sheet_name: str,
+            row_index: int,
+            column_index: int,
+            data_row_number: int | None,
+        ) -> int:
+
+            if row_index == 1:
+                return 1
+
+            if row_index == 2:
+                return 2
+
+            if row_index == 4:
+                return 3
+
+            base = (
+                9
+                if (
+                    data_row_number is not None
+                    and data_row_number % 2 == 0
+                )
+                else 8
+            )
+
+            fmt = number_format_id(
+                sheet_name,
+                column_index,
+            )
+
+            if fmt == 4:
+                return base + 2
+            if fmt == 5:
+                return base + 4
+            if fmt == 6:
+                return base + 6
+            if fmt == 7:
+                return base + 8
+
+            return base
 
         def cell_xml(
+            sheet_name: str,
             row_index: int,
             column_index: int,
             value: Any,
+            data_row_number: int | None = None,
         ) -> str:
 
             reference = (
@@ -2201,19 +3120,24 @@ class StudioApp(tk.Tk):
                 f"{row_index}"
             )
 
-            # Style 1 = header, Style 2 = data cells.
-            style_id = (
-                1
-                if row_index == 1
-                else 2
+            style = style_id(
+                sheet_name,
+                row_index,
+                column_index,
+                data_row_number,
             )
+
+            if value is None:
+                return (
+                    f'<c r="{reference}" s="{style}"/>'
+                )
 
             if isinstance(
                 value,
                 bool,
             ):
                 return (
-                    f'<c r="{reference}" s="{style_id}" t="b">'
+                    f'<c r="{reference}" s="{style}" t="b">'
                     f"<v>{1 if value else 0}</v>"
                     "</c>"
                 )
@@ -2225,61 +3149,276 @@ class StudioApp(tk.Tk):
                 value,
                 bool,
             ):
-                return (
-                    f'<c r="{reference}" s="{style_id}">'
-                    f"<v>{value}</v>"
-                    "</c>"
+                number = float(
+                    value
                 )
+
+                if not math.isfinite(
+                    number
+                ):
+                    value = ""
+
+                else:
+                    return (
+                        f'<c r="{reference}" s="{style}">'
+                        f"<v>{value}</v>"
+                        "</c>"
+                    )
 
             text_value = escape(
                 str(value)
             )
 
+            preserve_space = (
+                ' xml:space="preserve"'
+                if (
+                    str(value).startswith(" ")
+                    or str(value).endswith(" ")
+                )
+                else ""
+            )
+
             return (
-                f'<c r="{reference}" s="{style_id}" t="inlineStr">'
-                f"<is><t>{text_value}</t></is>"
+                f'<c r="{reference}" s="{style}" t="inlineStr">'
+                f"<is><t{preserve_space}>"
+                f"{text_value}"
+                "</t></is>"
                 "</c>"
             )
 
-        sheet_rows: list[str] = []
+        def worksheet_xml(
+            sheet_name: str,
+            title: str,
+            rows: list[list[Any]],
+            widths: list[float],
+        ) -> str:
 
-        for row_index, row in enumerate(
-            rows,
-            start=1,
-        ):
-
-            cells = "".join(
-                cell_xml(
-                    row_index,
-                    column_index,
-                    value,
+            max_columns = max(
+                1,
+                len(
+                    rows[0]
                 )
-                for column_index, value
+                if rows
+                else len(
+                    widths
+                )
+            )
+
+            title_cells = [
+                cell_xml(
+                    sheet_name,
+                    1,
+                    1,
+                    title,
+                )
+            ]
+
+            title_cells.extend(
+                cell_xml(
+                    sheet_name,
+                    1,
+                    column,
+                    None,
+                )
+                for column in range(
+                    2,
+                    max_columns + 1,
+                )
+            )
+
+            metadata_cells = [
+                cell_xml(
+                    sheet_name,
+                    2,
+                    1,
+                    metadata_text,
+                )
+            ]
+
+            metadata_cells.extend(
+                cell_xml(
+                    sheet_name,
+                    2,
+                    column,
+                    None,
+                )
+                for column in range(
+                    2,
+                    max_columns + 1,
+                )
+            )
+
+            sheet_rows = [
+                (
+                    '<row r="1" ht="26" customHeight="1">'
+                    + "".join(
+                        title_cells
+                    )
+                    + "</row>"
+                ),
+                (
+                    '<row r="2" ht="20" customHeight="1">'
+                    + "".join(
+                        metadata_cells
+                    )
+                    + "</row>"
+                ),
+                '<row r="3" ht="8" customHeight="1"/>',
+            ]
+
+            for data_index, row in enumerate(
+                rows,
+                start=0,
+            ):
+
+                excel_row = (
+                    4
+                    + data_index
+                )
+
+                row_cells = "".join(
+                    cell_xml(
+                        sheet_name,
+                        excel_row,
+                        column_index,
+                        value,
+                        (
+                            None
+                            if data_index == 0
+                            else data_index
+                        ),
+                    )
+                    for column_index, value
+                    in enumerate(
+                        row,
+                        start=1,
+                    )
+                )
+
+                row_height = (
+                    22
+                    if data_index == 0
+                    else 19
+                )
+
+                sheet_rows.append(
+                    f'<row r="{excel_row}" ht="{row_height}" '
+                    'customHeight="1">'
+                    + row_cells
+                    + "</row>"
+                )
+
+            column_xml = "".join(
+                (
+                    f'<col min="{index}" max="{index}" '
+                    f'width="{width}" customWidth="1"/>'
+                )
+                for index, width
                 in enumerate(
-                    row,
+                    widths,
                     start=1,
                 )
             )
 
-            sheet_rows.append(
-                f'<row r="{row_index}">{cells}</row>'
+            last_row = max(
+                4,
+                3
+                + len(
+                    rows
+                ),
             )
 
-        worksheet = (
-            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-            '<worksheet xmlns="http://schemas.openxmlformats.org/'
-            'spreadsheetml/2006/main">'
-            '<cols>'
-            '<col min="1" max="1" width="12" customWidth="1"/>'
-            '<col min="2" max="4" width="16" customWidth="1"/>'
-            '<col min="5" max="8" width="18" customWidth="1"/>'
-            '</cols>'
-            "<sheetData>"
-            + "".join(
-                sheet_rows
+            last_column = cls._xlsx_column_name(
+                max_columns
             )
-            + "</sheetData>"
-            "</worksheet>"
+
+            auto_filter = (
+                f'<autoFilter ref="A4:{last_column}{last_row}"/>'
+                if rows
+                else ""
+            )
+
+            merged_cells = (
+                '<mergeCells count="2">'
+                f'<mergeCell ref="A1:{last_column}1"/>'
+                f'<mergeCell ref="A2:{last_column}2"/>'
+                "</mergeCells>"
+            )
+
+            return (
+                '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                '<worksheet xmlns="http://schemas.openxmlformats.org/'
+                'spreadsheetml/2006/main">'
+                '<sheetViews>'
+                '<sheetView workbookViewId="0" showGridLines="0">'
+                '<pane ySplit="4" topLeftCell="A5" '
+                'activePane="bottomLeft" state="frozen"/>'
+                '<selection pane="bottomLeft" activeCell="A5" sqref="A5"/>'
+                '</sheetView>'
+                '</sheetViews>'
+                '<sheetFormatPr defaultRowHeight="18"/>'
+                '<cols>'
+                + column_xml
+                + '</cols>'
+                '<sheetData>'
+                + "".join(
+                    sheet_rows
+                )
+                + '</sheetData>'
+                + auto_filter
+                + merged_cells
+                + '<pageMargins left="0.35" right="0.35" '
+                'top="0.55" bottom="0.55" header="0.2" footer="0.2"/>'
+                '<pageSetup orientation="landscape" fitToWidth="1" '
+                'fitToHeight="0"/>'
+                '</worksheet>'
+            )
+
+        summary_xml = worksheet_xml(
+            "Measurement Summary",
+            "GMJ Spinning Drop IFT — Measurement Summary",
+            summary_rows,
+            [
+                12,
+                16,
+                17,
+                17,
+                16,
+                17,
+                17,
+                18,
+                17,
+                13,
+            ],
+        )
+
+        samples_xml = worksheet_xml(
+            "Stage Samples",
+            "GMJ Spinning Drop IFT — Stage Samples",
+            sample_rows,
+            [
+                12,
+                11,
+                16,
+                17,
+                26,
+                64,
+            ],
+        )
+
+        statistics_xml = worksheet_xml(
+            "Statistics",
+            "GMJ Spinning Drop IFT — Statistics",
+            statistics_rows,
+            [
+                12,
+                10,
+                18,
+                17,
+                17,
+                18,
+                13,
+            ],
         )
 
         workbook = (
@@ -2288,11 +3427,12 @@ class StudioApp(tk.Tk):
             'spreadsheetml/2006/main" '
             'xmlns:r="http://schemas.openxmlformats.org/'
             'officeDocument/2006/relationships">'
-            "<sheets>"
-            '<sheet name="Measurement Log" sheetId="1" '
-            'r:id="rId1"/>'
-            "</sheets>"
-            "</workbook>"
+            '<sheets>'
+            '<sheet name="Measurement Summary" sheetId="1" r:id="rId1"/>'
+            '<sheet name="Stage Samples" sheetId="2" r:id="rId2"/>'
+            '<sheet name="Statistics" sheetId="3" r:id="rId3"/>'
+            '</sheets>'
+            '</workbook>'
         )
 
         workbook_rels = (
@@ -2305,9 +3445,17 @@ class StudioApp(tk.Tk):
             'Target="worksheets/sheet1.xml"/>'
             '<Relationship Id="rId2" '
             'Type="http://schemas.openxmlformats.org/officeDocument/'
+            '2006/relationships/worksheet" '
+            'Target="worksheets/sheet2.xml"/>'
+            '<Relationship Id="rId3" '
+            'Type="http://schemas.openxmlformats.org/officeDocument/'
+            '2006/relationships/worksheet" '
+            'Target="worksheets/sheet3.xml"/>'
+            '<Relationship Id="rId4" '
+            'Type="http://schemas.openxmlformats.org/officeDocument/'
             '2006/relationships/styles" '
             'Target="styles.xml"/>'
-            "</Relationships>"
+            '</Relationships>'
         )
 
         root_rels = (
@@ -2318,7 +3466,7 @@ class StudioApp(tk.Tk):
             'Type="http://schemas.openxmlformats.org/officeDocument/'
             '2006/relationships/officeDocument" '
             'Target="xl/workbook.xml"/>'
-            "</Relationships>"
+            '</Relationships>'
         )
 
         content_types = (
@@ -2336,53 +3484,138 @@ class StudioApp(tk.Tk):
             '<Override PartName="/xl/worksheets/sheet1.xml" '
             'ContentType="application/vnd.openxmlformats-officedocument.'
             'spreadsheetml.worksheet+xml"/>'
+            '<Override PartName="/xl/worksheets/sheet2.xml" '
+            'ContentType="application/vnd.openxmlformats-officedocument.'
+            'spreadsheetml.worksheet+xml"/>'
+            '<Override PartName="/xl/worksheets/sheet3.xml" '
+            'ContentType="application/vnd.openxmlformats-officedocument.'
+            'spreadsheetml.worksheet+xml"/>'
             '<Override PartName="/xl/styles.xml" '
             'ContentType="application/vnd.openxmlformats-officedocument.'
             'spreadsheetml.styles+xml"/>'
-            "</Types>"
+            '</Types>'
         )
 
+        # Styles:
+        # 1 title, 2 metadata, 3 table header.
+        # 8/9 body odd/even.
+        # Subsequent pairs add restrained numeric formats to body cells.
         styles = (
             '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
             '<styleSheet xmlns="http://schemas.openxmlformats.org/'
             'spreadsheetml/2006/main">'
-            '<fonts count="2">'
-            '<font><sz val="11"/><name val="Calibri"/></font>'
-            '<font><b/><color rgb="FFFFFFFF"/><sz val="11"/>'
+            '<numFmts count="4">'
+            '<numFmt numFmtId="164" formatCode="0.000"/>'
+            '<numFmt numFmtId="165" formatCode="0.000000"/>'
+            '<numFmt numFmtId="166" formatCode="0.000000E+00"/>'
+            '<numFmt numFmtId="167" formatCode="0.00"/>'
+            '</numFmts>'
+            '<fonts count="4">'
+            '<font><sz val="10"/><name val="Calibri"/></font>'
+            '<font><b/><color rgb="FFFFFFFF"/><sz val="15"/>'
+            '<name val="Calibri"/></font>'
+            '<font><color rgb="FF405466"/><sz val="9"/>'
+            '<name val="Calibri"/></font>'
+            '<font><b/><color rgb="FFFFFFFF"/><sz val="10"/>'
             '<name val="Calibri"/></font>'
             '</fonts>'
-            '<fills count="3">'
+            '<fills count="6">'
             '<fill><patternFill patternType="none"/></fill>'
             '<fill><patternFill patternType="gray125"/></fill>'
             '<fill><patternFill patternType="solid">'
-            '<fgColor rgb="FF4F81BD"/><bgColor indexed="64"/>'
+            '<fgColor rgb="FF23465C"/><bgColor indexed="64"/>'
+            '</patternFill></fill>'
+            '<fill><patternFill patternType="solid">'
+            '<fgColor rgb="FFEAF1F5"/><bgColor indexed="64"/>'
+            '</patternFill></fill>'
+            '<fill><patternFill patternType="solid">'
+            '<fgColor rgb="FF2E6F8E"/><bgColor indexed="64"/>'
+            '</patternFill></fill>'
+            '<fill><patternFill patternType="solid">'
+            '<fgColor rgb="FFF5F8FA"/><bgColor indexed="64"/>'
             '</patternFill></fill>'
             '</fills>'
             '<borders count="2">'
             '<border><left/><right/><top/><bottom/><diagonal/></border>'
             '<border>'
-            '<left style="thin"><color rgb="FF808080"/></left>'
-            '<right style="thin"><color rgb="FF808080"/></right>'
-            '<top style="thin"><color rgb="FF808080"/></top>'
-            '<bottom style="thin"><color rgb="FF808080"/></bottom>'
+            '<left style="thin"><color rgb="FFD4DEE4"/></left>'
+            '<right style="thin"><color rgb="FFD4DEE4"/></right>'
+            '<top style="thin"><color rgb="FFD4DEE4"/></top>'
+            '<bottom style="thin"><color rgb="FFD4DEE4"/></bottom>'
             '<diagonal/>'
             '</border>'
             '</borders>'
             '<cellStyleXfs count="1">'
             '<xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>'
             '</cellStyleXfs>'
-            '<cellXfs count="3">'
-            '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" '
-            'xfId="0"/>'
-            '<xf numFmtId="0" fontId="1" fillId="2" borderId="1" '
-            'xfId="0" applyFont="1" applyFill="1" applyBorder="1" '
-            'applyAlignment="1">'
+            '<cellXfs count="26">'
+            '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'
+            '<xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" '
+            'applyFont="1" applyFill="1" applyAlignment="1">'
+            '<alignment horizontal="left" vertical="center"/>'
+            '</xf>'
+            '<xf numFmtId="0" fontId="2" fillId="3" borderId="0" xfId="0" '
+            'applyFont="1" applyFill="1" applyAlignment="1">'
+            '<alignment horizontal="left" vertical="center"/>'
+            '</xf>'
+            '<xf numFmtId="0" fontId="3" fillId="4" borderId="1" xfId="0" '
+            'applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1">'
+            '<alignment horizontal="center" vertical="center" wrapText="1"/>'
+            '</xf>'
+            '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'
+            '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'
+            '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'
+            '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'
+            '<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" '
+            'applyBorder="1" applyAlignment="1">'
             '<alignment horizontal="center" vertical="center"/>'
             '</xf>'
-            '<xf numFmtId="0" fontId="0" fillId="0" borderId="1" '
-            'xfId="0" applyBorder="1" applyAlignment="1">'
+            '<xf numFmtId="0" fontId="0" fillId="5" borderId="1" xfId="0" '
+            'applyFill="1" applyBorder="1" applyAlignment="1">'
             '<alignment horizontal="center" vertical="center"/>'
             '</xf>'
+            '<xf numFmtId="164" fontId="0" fillId="0" borderId="1" xfId="0" '
+            'applyNumberFormat="1" applyBorder="1" applyAlignment="1">'
+            '<alignment horizontal="center" vertical="center"/>'
+            '</xf>'
+            '<xf numFmtId="164" fontId="0" fillId="5" borderId="1" xfId="0" '
+            'applyNumberFormat="1" applyFill="1" applyBorder="1" applyAlignment="1">'
+            '<alignment horizontal="center" vertical="center"/>'
+            '</xf>'
+            '<xf numFmtId="165" fontId="0" fillId="0" borderId="1" xfId="0" '
+            'applyNumberFormat="1" applyBorder="1" applyAlignment="1">'
+            '<alignment horizontal="center" vertical="center"/>'
+            '</xf>'
+            '<xf numFmtId="165" fontId="0" fillId="5" borderId="1" xfId="0" '
+            'applyNumberFormat="1" applyFill="1" applyBorder="1" applyAlignment="1">'
+            '<alignment horizontal="center" vertical="center"/>'
+            '</xf>'
+            '<xf numFmtId="166" fontId="0" fillId="0" borderId="1" xfId="0" '
+            'applyNumberFormat="1" applyBorder="1" applyAlignment="1">'
+            '<alignment horizontal="center" vertical="center"/>'
+            '</xf>'
+            '<xf numFmtId="166" fontId="0" fillId="5" borderId="1" xfId="0" '
+            'applyNumberFormat="1" applyFill="1" applyBorder="1" applyAlignment="1">'
+            '<alignment horizontal="center" vertical="center"/>'
+            '</xf>'
+            '<xf numFmtId="167" fontId="0" fillId="0" borderId="1" xfId="0" '
+            'applyNumberFormat="1" applyBorder="1" applyAlignment="1">'
+            '<alignment horizontal="center" vertical="center"/>'
+            '</xf>'
+            '<xf numFmtId="167" fontId="0" fillId="5" borderId="1" xfId="0" '
+            'applyNumberFormat="1" applyFill="1" applyBorder="1" applyAlignment="1">'
+            '<alignment horizontal="center" vertical="center"/>'
+            '</xf>'
+            # Styles 18..25 are aliases retained so future small formatting
+            # adjustments can be made without disturbing existing IDs.
+            '<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0"/>'
+            '<xf numFmtId="0" fontId="0" fillId="5" borderId="1" xfId="0"/>'
+            '<xf numFmtId="164" fontId="0" fillId="0" borderId="1" xfId="0"/>'
+            '<xf numFmtId="164" fontId="0" fillId="5" borderId="1" xfId="0"/>'
+            '<xf numFmtId="165" fontId="0" fillId="0" borderId="1" xfId="0"/>'
+            '<xf numFmtId="165" fontId="0" fillId="5" borderId="1" xfId="0"/>'
+            '<xf numFmtId="167" fontId="0" fillId="0" borderId="1" xfId="0"/>'
+            '<xf numFmtId="167" fontId="0" fillId="5" borderId="1" xfId="0"/>'
             '</cellXfs>'
             '<cellStyles count="1">'
             '<cellStyle name="Normal" xfId="0" builtinId="0"/>'
@@ -2428,7 +3661,17 @@ class StudioApp(tk.Tk):
 
             archive.writestr(
                 "xl/worksheets/sheet1.xml",
-                worksheet,
+                summary_xml,
+            )
+
+            archive.writestr(
+                "xl/worksheets/sheet2.xml",
+                samples_xml,
+            )
+
+            archive.writestr(
+                "xl/worksheets/sheet3.xml",
+                statistics_xml,
             )
 
     def _measurement_table_rows(
@@ -2482,6 +3725,307 @@ class StudioApp(tk.Tk):
 
         return None
 
+    def _measurement_workbook_rows(
+        self,
+    ) -> tuple[
+        list[list[Any]],
+        list[list[Any]],
+        list[list[Any]],
+    ] | None:
+        """
+        Build the three workbook tables from the current 10-sample runtime
+        records. Falls back to the visible summary table if detailed records
+        are unavailable, preserving export reliability.
+        """
+
+        table_rows = (
+            self._measurement_table_rows()
+        )
+
+        if (
+            table_rows is None
+            or len(
+                table_rows
+            ) <= 1
+        ):
+            return None
+
+        summary_headers = [
+            "RPM",
+            "Avg Dia (px)",
+            "Avg Dia (mm)",
+            "Δρ (kg/m³)",
+            "ω²",
+            "r³",
+            "IFT (N/m)",
+            "IFT (mN/m)",
+            "Std Dev (px)",
+            "CV (%)",
+        ]
+
+        sample_headers = [
+            "RPM",
+            "Sample",
+            "Dia (px)",
+            "Dia (mm)",
+            "Scale Factor (mm/px)",
+            "Capture File",
+        ]
+
+        statistics_headers = [
+            "RPM",
+            "N",
+            "Mean Dia (px)",
+            "Min Dia (px)",
+            "Max Dia (px)",
+            "Std Dev (px)",
+            "CV (%)",
+        ]
+
+        detailed = getattr(
+            self.runtime,
+            "gmj_stage_measurements",
+            None,
+        )
+
+        summary_rows: list[list[Any]] = [
+            summary_headers
+        ]
+
+        sample_rows: list[list[Any]] = [
+            sample_headers
+        ]
+
+        statistics_rows: list[list[Any]] = [
+            statistics_headers
+        ]
+
+        if isinstance(
+            detailed,
+            list,
+        ) and detailed:
+
+            for record in detailed:
+
+                if not isinstance(
+                    record,
+                    dict,
+                ):
+                    continue
+
+                summary = record.get(
+                    "summary_row"
+                )
+
+                stats = record.get(
+                    "statistics"
+                )
+
+                samples = record.get(
+                    "samples"
+                )
+
+                if (
+                    not isinstance(
+                        summary,
+                        list,
+                    )
+                    or len(
+                        summary
+                    ) < 8
+                    or not isinstance(
+                        stats,
+                        dict,
+                    )
+                ):
+                    continue
+
+                summary_rows.append(
+                    [
+                        summary[0],
+                        summary[1],
+                        summary[2],
+                        summary[3],
+                        summary[4],
+                        summary[5],
+                        summary[6],
+                        summary[7],
+                        stats.get(
+                            "std_dev_diameter_px",
+                            "",
+                        ),
+                        stats.get(
+                            "cv_percent",
+                            "",
+                        ),
+                    ]
+                )
+
+                statistics_rows.append(
+                    [
+                        summary[0],
+                        int(
+                            round(
+                                float(
+                                    stats.get(
+                                        "n",
+                                        0,
+                                    )
+                                )
+                            )
+                        ),
+                        stats.get(
+                            "mean_diameter_px",
+                            "",
+                        ),
+                        stats.get(
+                            "min_diameter_px",
+                            "",
+                        ),
+                        stats.get(
+                            "max_diameter_px",
+                            "",
+                        ),
+                        stats.get(
+                            "std_dev_diameter_px",
+                            "",
+                        ),
+                        stats.get(
+                            "cv_percent",
+                            "",
+                        ),
+                    ]
+                )
+
+                if isinstance(
+                    samples,
+                    list,
+                ):
+
+                    if len(sample_rows) > 1:
+                        sample_rows.append(
+                            ["", "", "", "", "", ""]
+                        )
+
+                    for sample in samples:
+
+                        if not isinstance(
+                            sample,
+                            dict,
+                        ):
+                            continue
+
+                        sample_rows.append(
+                            [
+                                sample.get(
+                                    "rpm",
+                                    summary[0],
+                                ),
+                                sample.get(
+                                    "sample",
+                                    "",
+                                ),
+                                sample.get(
+                                    "diameter_px",
+                                    "",
+                                ),
+                                sample.get(
+                                    "diameter_mm",
+                                    "",
+                                ),
+                                sample.get(
+                                    "scale_factor_mm_per_px",
+                                    "",
+                                ),
+                                sample.get(
+                                    "capture_file",
+                                    "",
+                                ),
+                            ]
+                        )
+
+        # Fallback: preserve a valid summary export even if detailed runtime
+        # records are unavailable for any reason.
+        if len(
+            summary_rows
+        ) == 1:
+
+            for row in table_rows[
+                1:
+            ]:
+
+                if len(
+                    row
+                ) < 8:
+                    continue
+
+                summary_rows.append(
+                    [
+                        row[0],
+                        row[1],
+                        row[2],
+                        row[3],
+                        row[4],
+                        row[5],
+                        row[6],
+                        row[7],
+                        "",
+                        "",
+                    ]
+                )
+
+        return (
+            summary_rows,
+            sample_rows,
+            statistics_rows,
+        )
+
+    def _next_measurement_export_path(
+        self,
+    ) -> Path:
+        """
+        Return the next non-overwriting Excel path for this app session.
+
+        Active session:
+            Measurements/spinning_drop_run_001.xlsx
+            Measurements/spinning_drop_run_002.xlsx
+
+        Measurements are written only inside the active session.
+        """
+
+        if self.session_root is None:
+            raise RuntimeError(
+                "Measurement export requires an active session"
+            )
+
+        folder = session_measurements_dir(
+            self.session_root
+        )
+
+        folder.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        counter = (
+            self._measurement_run_counter
+            + 1
+        )
+
+        while True:
+            destination = (
+                folder
+                / (
+                    "spinning_drop_run_"
+                    f"{counter:03d}.xlsx"
+                )
+            )
+
+            if not destination.exists():
+                return destination
+
+            counter += 1
+
     def _export_measurement_table(
         self,
     ) -> None:
@@ -2492,42 +4036,44 @@ class StudioApp(tk.Tk):
         ):
             return
 
-        rows = (
-            self._measurement_table_rows()
+        workbook_rows = (
+            self._measurement_workbook_rows()
         )
 
-        if (
-            rows is None
-            or len(
-                rows
-            ) <= 1
-        ):
+        if workbook_rows is None:
             return
 
-        folder = (
-            measurement_exports_dir()
-        )
-
-        timestamp = (
-            datetime.now()
-            .strftime(
-                "%Y%m%d_%H%M%S"
-            )
-        )
+        (
+            summary_rows,
+            sample_rows,
+            statistics_rows,
+        ) = workbook_rows
 
         destination = (
-            folder
-            / (
-                "spinning_drop_"
-                f"{timestamp}.xlsx"
+            self._next_measurement_export_path()
+        )
+
+        mode_label = (
+            "Standard"
+            if self.operating_mode
+            == "standard"
+            else (
+                "Manual"
+                if self.operating_mode
+                == "manual"
+                else "Other"
             )
         )
 
         try:
 
-            self._write_simple_xlsx(
-                rows,
+            self._write_measurement_xlsx(
+                summary_rows,
+                sample_rows,
+                statistics_rows,
                 destination,
+                session_id=self.session_id,
+                mode_label=mode_label,
             )
 
         except OSError as exc:
@@ -2543,6 +4089,19 @@ class StudioApp(tk.Tk):
 
         self._measurement_exported = True
         self._measurement_run_active = False
+
+        try:
+            self._measurement_run_counter = int(
+                destination.stem.rsplit(
+                    "_",
+                    1,
+                )[1]
+            )
+        except (
+            IndexError,
+            ValueError,
+        ):
+            self._measurement_run_counter += 1
 
         self.log(
             "EXPORTED "
@@ -2599,6 +4158,196 @@ class StudioApp(tk.Tk):
             "Execution started"
         )
 
+    def _analysis_snapshot_worker_loop(
+        self,
+    ) -> None:
+        """
+        Render queued Analysis PNG files away from the Tk/UI thread.
+
+        Every job already contains a frozen copy of the values and chart data
+        belonging to one raw stage sample.
+        """
+
+        while True:
+
+            job = self._analysis_snapshot_jobs.get()
+
+            try:
+                snapshot_data, output_path = job
+
+                PanelDesigner.render_analysis_snapshot(
+                    snapshot_data,
+                    output_path,
+                )
+
+            except Exception:
+                # Analysis export must never stop motor/runtime/UI processing.
+                # task_done() below also guarantees close_app cannot wait
+                # forever on a failed image.
+                pass
+
+            finally:
+                self._analysis_snapshot_jobs.task_done()
+
+    def _capture_pending_analysis_snapshot(
+        self,
+    ) -> None:
+        """
+        Capture at most one queued analysis snapshot after the latest
+        Front Panel result has been rendered.
+
+        The runtime queues one request for each saved stage image, so the
+        analysis PNG follows the same RPM/sample sequence as the 10 raw images.
+        """
+
+        if (
+            self.front_panel is None
+            or self.session_root is None
+        ):
+            return
+
+        requests = getattr(
+            self.runtime,
+            "gmj_analysis_capture_requests",
+            None,
+        )
+
+        if (
+            not isinstance(
+                requests,
+                list,
+            )
+            or not requests
+        ):
+            return
+
+        request = requests.pop(
+            0
+        )
+
+        try:
+            rpm = int(
+                round(
+                    float(
+                        request[
+                            "rpm"
+                        ]
+                    )
+                )
+            )
+
+            sample_index = int(
+                request[
+                    "sample_index"
+                ]
+            )
+
+            capture_file = Path(
+                str(
+                    request[
+                        "capture_file"
+                    ]
+                )
+            )
+
+        except (
+            KeyError,
+            TypeError,
+            ValueError,
+        ):
+            return
+
+        output_dir = (
+            session_analysis_rpm_dir(
+                self.session_root,
+                rpm,
+            )
+        )
+
+        output_dir.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        raw_name = (
+            capture_file.stem
+        )
+
+        expected_prefix = (
+            f"stage_{rpm}rpm_"
+        )
+
+        suffix = (
+            raw_name[
+                len(
+                    expected_prefix
+                ):
+            ]
+            if raw_name.startswith(
+                expected_prefix
+            )
+            else (
+                f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_"
+                f"{sample_index:03d}"
+            )
+        )
+
+        output_path = (
+            output_dir
+            / (
+                f"analysis_{rpm}rpm_"
+                f"{suffix}.png"
+            )
+        )
+
+        display_values: dict[
+            str,
+            Any,
+        ] = {}
+
+        display_frame = request.get(
+            "display_frame"
+        )
+        display_wire_profile = request.get(
+            "display_wire_profile"
+        )
+
+        if display_frame is not None:
+            display_values[
+                "wire_picture"
+            ] = display_frame
+
+        if isinstance(
+            display_wire_profile,
+            list,
+        ):
+            display_values[
+                "wire_chart"
+            ] = display_wire_profile
+
+        if display_values:
+            # Visible update for this exact saved sample. It happens before
+            # freeze_analysis_snapshot(), so Analysis PNG #n sees the same
+            # Picture Comparison / Grafik Kawat state as sample #n.
+            self.front_panel.update_values(
+                display_values
+            )
+            self._stage_display_override_active = True
+
+        snapshot_data = (
+            self.front_panel.freeze_analysis_snapshot()
+        )
+
+        if snapshot_data is None:
+            return
+
+        self._analysis_snapshot_jobs.put(
+            (
+                snapshot_data,
+                output_path,
+            )
+        )
+
     # ============================================================
     # APPLY RESULT
     # ============================================================
@@ -2613,6 +4362,42 @@ class StudioApp(tk.Tk):
         )
 
         if self.front_panel:
+
+            if self.operating_mode in (
+                "standard",
+                "manual",
+            ):
+                if result.values.get(
+                    "oil_picture"
+                ) is not None:
+                    self._pre_run_camera_ready = True
+                    self._hardware_camera_connected = True
+
+                if self._pre_run_positive_number(
+                    result.values.get(
+                        "scale_display"
+                    )
+                ):
+                    self._pre_run_calibration_ready = True
+
+                # Serial reader returns a normal telemetry/error payload when
+                # the active Arduino session is healthy. Any runtime error
+                # that names the serial/Arduino path clears this indicator.
+                serial_error = any(
+                    (
+                        "serial" in str(error).lower()
+                        or "arduino" in str(error).lower()
+                        or "com" in str(error).lower()
+                    )
+                    for error in result.errors
+                )
+
+                if serial_error:
+                    self._hardware_arduino_connected = False
+                elif self.controller.running:
+                    self._hardware_arduino_connected = True
+
+                self._refresh_hardware_status_dashboard()
 
             # Spinning-drop Standard / Manual Mode:
             # Motor START/STOP is controlled by the operator.
@@ -2642,6 +4427,16 @@ class StudioApp(tk.Tk):
                     None,
                 )
 
+                if self._stage_display_override_active:
+                    panel_values.pop(
+                        "wire_picture",
+                        None,
+                    )
+                    panel_values.pop(
+                        "wire_chart",
+                        None,
+                    )
+
                 self.front_panel.update_values(
                     panel_values
                 )
@@ -2651,6 +4446,12 @@ class StudioApp(tk.Tk):
                 self.front_panel.update_values(
                     result.values
                 )
+
+            if self.operating_mode in (
+                "standard",
+                "manual",
+            ):
+                self._capture_pending_analysis_snapshot()
 
             # Capture Reference momentary reset:
             # reset only after this completed runtime result proves
@@ -2933,6 +4734,13 @@ class StudioApp(tk.Tk):
 
         self._last_runtime_ui_update = 0.0
 
+        # A new runtime must prove fresh camera/calibration readiness.
+        self._pre_run_camera_ready = False
+        self._pre_run_calibration_ready = False
+        self._hardware_camera_connected = False
+        self._hardware_arduino_connected = False
+        self._refresh_hardware_status_dashboard()
+
         self.runtime.reset()
 
         self.run_button.configure(
@@ -3083,6 +4891,12 @@ class StudioApp(tk.Tk):
         self.continuous = False
 
         self.controller.stop()
+
+        self._pre_run_camera_ready = False
+        self._pre_run_calibration_ready = False
+        self._hardware_camera_connected = False
+        self._hardware_arduino_connected = False
+        self._refresh_hardware_status_dashboard()
 
         # Jangan render frame lama setelah execution dihentikan.
         self._latest_runtime_result = None
@@ -3519,8 +5333,20 @@ class StudioApp(tk.Tk):
 
         def finish() -> None:
 
-            if self.controller.join(
-                0
+            controller_done = (
+                self.controller.join(
+                    0
+                )
+            )
+
+            analysis_done = (
+                self._analysis_snapshot_jobs.unfinished_tasks
+                == 0
+            )
+
+            if (
+                controller_done
+                and analysis_done
             ):
 
                 self.destroy()

@@ -1,4 +1,4 @@
-# PyLabView Studio 7.9.0
+# PyLabView Studio 8.0.0
 
 PyLabView Studio adalah aplikasi desktop visual dataflow independen untuk Python 3.10+ dan `tkinter`. Aplikasi mempertahankan core dataflow dan schema proyek v3, serta menyediakan integrasi instrumentation, vision, serial communication, dan workflow spinning-drop interfacial tension (IFT).
 
@@ -6,33 +6,51 @@ Proyek ini tidak berafiliasi dengan National Instruments; LabVIEW adalah merek d
 
 ## Spinning-Drop IFT
 
-PyLabView Studio 7.9.0 menyediakan workflow spinning-drop IFT dengan dua mode operasi:
+PyLabView Studio 8.0.0 menyediakan workflow spinning-drop IFT dengan dua mode operasi:
 
 - **Standard Mode**: menjalankan sequence RPM 1000 → 2000 → 3000 → 4000 → 5000 → 6000 RPM dengan kontrol PID pada Arduino dan stage otomatis.
 - **Manual RPM Mode**: operator menentukan target RPM hingga 6000 RPM, sedangkan PWM tetap dikendalikan otomatis oleh PID.
 - Arduino serial telemetry untuk RPM, PWM, elapsed time, dan current target.
 - Kamera/OpenCV untuk live image dan pengukuran diameter.
 - Wire/reference calibration untuk konversi diameter pixel ke millimeter.
-- Capture Reference satu klik dan Picture Comparison.
-- Automatic stage snapshot.
-- Perhitungan spinning-drop IFT menggunakan parameter density difference, angular velocity, radius, serta output IFT dalam N/m dan mN/m.
+- Capture Reference satu klik dengan calibration reference yang tetap frozen selama measurement run.
+- Picture Comparison dan Grafik Kawat dapat mengikuti masing-masing stage sample tanpa mengganti calibration reference.
+- Setiap completed stage/target menghasilkan 10 raw stage JPG captures.
+- Setiap raw stage sample memiliki satu synchronized Analysis PNG berisi Grafik Oil, Grafik Kawat, w², r³, IFT N/m, dan IFT mN/m.
+- Analysis PNG dirender melalui background worker agar proses encoding/write tidak memblokir refresh Front Panel.
+- Perhitungan spinning-drop IFT menggunakan density difference, angular velocity, radius, serta output IFT dalam N/m dan mN/m.
 - Measurement Log untuk setiap stage pengukuran.
-- Automatic Excel `.xlsx` export setelah measurement run.
+- Automatic Excel `.xlsx` export dengan tiga sheet: Measurement Summary, Stage Samples, dan Statistics.
 - Global Stop dan Stop Continuous untuk kontrol measurement/runtime.
 - **Stop Bertahap** untuk deselerasi motor secara gradual pada Standard Mode dan Manual RPM Mode; hard Stop tetap bekerja secara langsung sebagai emergency stop.
 
 Data pengguna disimpan pada:
 
-`Documents\GMJ PyLabView`
+`Documents\GMJ PyLabView\`
 
-dengan struktur:
+dengan struktur utama:
 
-- `Captures`
-- `Measurement Exports`
-- `Examples`
-- `Projects`
+```text
+GMJ PyLabView\
+├── Examples\
+├── Projects\
+└── Sessions\
+    └── Session_YYYYMMDD_HHMMSS_Standard|Manual\
+        ├── Captures\
+        │   ├── Reference\
+        │   ├── Stages\
+        │   │   └── <RPM>_RPM\
+        │   └── Analysis\
+        │       └── <RPM>_RPM\
+        ├── Measurements\
+        └── Session_Info.json
+```
 
-Default example project tersedia untuk Standard Mode dan Manual RPM Mode. Existing user examples tidak ditimpa saat aplikasi dijalankan kembali.
+Folder RPM dibuat on-demand saat capture dilakukan.
+
+Default example project tersedia untuk Standard Mode dan Manual RPM Mode. Bundled examples adalah master startup project; user-copy di `Documents\GMJ PyLabView\Examples` disinkronkan dari bundled release examples.
+
+Legacy top-level `Captures`, `Measurement Exports`, dan `spinning-drop-ift.csv` tidak lagi digunakan oleh workflow spinning-drop release 8.0.0.
 
 ## Instrumentation
 
@@ -83,7 +101,7 @@ Windows build tidak membundel driver vendor NI/VISA.
 
 ## Compatibility
 
-App version adalah **7.9.0**.
+App version adalah **8.0.0**.
 
 Format persisted tetap `pylabview-project` schema version 3. Perubahan versi aplikasi tidak mengubah schema project.
 
@@ -92,14 +110,11 @@ V1/v2 tetap dimigrasi ke schema v3 dan semua project v3 tetap dapat dibuka.
 ## Test
 
 ```bash
+python -m pytest
 python -m unittest discover -s tests -v
-
 python -m compileall -q pylabview tests
-
 python -m pylabview --self-test
-
 python -m pylabview --self-test-full
-
 git diff --check
 ```
 

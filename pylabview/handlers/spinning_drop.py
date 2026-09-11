@@ -6,7 +6,11 @@ import re
 from datetime import datetime
 
 from ..execution import CancelledError
-from ..paths import captures_dir
+from ..paths import (
+    captures_dir,
+    session_reference_dir,
+    session_stage_dir,
+)
 from ..typesystem import ErrorCluster
 from .api import HandlerContext
 from .registry import BUILTIN_HANDLERS as registry
@@ -65,6 +69,86 @@ def _stage_snapshot_frame_key(
     )
 
 
+def _stage_sample_event_key(
+    context: HandlerContext,
+) -> str:
+
+    return (
+        f"spinning-drop-stage-sample-event:"
+        f"{context.caller_vi or 'graph'}:"
+        f"{context.graph_scope}"
+    )
+
+
+def _stage_measurements_key(
+    context: HandlerContext,
+) -> str:
+
+    return (
+        f"spinning-drop-stage-measurements:"
+        f"{context.caller_vi or 'graph'}:"
+        f"{context.graph_scope}"
+    )
+
+
+def _stage_summary_from_samples(
+    rpm: float,
+    samples: list[dict[str, object]],
+) -> tuple[list[float], dict[str, float]] | None:
+
+    if len(samples) != 10:
+        return None
+
+    try:
+        diameters_px = [float(sample["diameter_px"]) for sample in samples]
+        diameters_mm = [float(sample["diameter_mm"]) for sample in samples]
+        delta_rhos = [float(sample["delta_rho"]) for sample in samples]
+    except (KeyError, TypeError, ValueError):
+        return None
+
+    values = [*diameters_px, *diameters_mm, *delta_rhos, float(rpm)]
+    if not all(math.isfinite(value) and value > 0.0 for value in values):
+        return None
+
+    n = len(diameters_px)
+    mean_px = sum(diameters_px) / n
+    mean_mm = sum(diameters_mm) / n
+    minimum_px = min(diameters_px)
+    maximum_px = max(diameters_px)
+    variance_px = sum((value - mean_px) ** 2 for value in diameters_px) / (n - 1)
+    std_dev_px = math.sqrt(variance_px)
+    cv_percent = std_dev_px / mean_px * 100.0
+    delta_rho = sum(delta_rhos) / len(delta_rhos)
+    omega = 2.0 * math.pi * float(rpm) / 60.0
+    omega_squared = omega ** 2
+    radius_m = mean_mm / 1000.0 / 2.0
+    radius_cubed = radius_m ** 3
+    ift_n_m = delta_rho * omega_squared * radius_cubed / 4.0
+    ift_mn_m = ift_n_m * 1000.0
+
+    row = [
+        float(rpm),
+        mean_px,
+        mean_mm,
+        delta_rho,
+        omega_squared,
+        radius_cubed,
+        ift_n_m,
+        ift_mn_m,
+    ]
+
+    statistics = {
+        "n": float(n),
+        "mean_diameter_px": mean_px,
+        "min_diameter_px": minimum_px,
+        "max_diameter_px": maximum_px,
+        "std_dev_diameter_px": std_dev_px,
+        "cv_percent": cv_percent,
+    }
+
+    return row, statistics
+
+
 def _telemetry_snapshot_key(
     context: HandlerContext,
 ) -> str:
@@ -84,6 +168,111 @@ def _max_rpm_reached_key(
         f"spinning-drop-max-rpm-reached:"
         f"{context.caller_vi or 'graph'}:"
         f"{context.graph_scope}"
+    )
+
+
+def _active_session_root(
+    context: HandlerContext,
+):
+    """
+    Return the application-owned active session root when available.
+
+    The app owns session lifecycle and exposes the current session through
+    DataflowRuntime. If unavailable, existing legacy capture behaviour is
+    preserved.
+    """
+
+    return getattr(
+        context.runtime,
+        "gmj_session_root",
+        None,
+    )
+
+
+def _manual_mode_active(
+    context: HandlerContext,
+) -> bool:
+    """
+    Detect the active Manual-RPM runtime from its existing session state.
+
+    Manual telemetry must already exist before telemetry_run can be True,
+    so this safely prevents the shared camera handler from applying the
+    Standard-only initial 1000-RPM auto-capture rule in Manual mode.
+    """
+
+    return any(
+        str(key).startswith(
+            (
+                "manual-telemetry:",
+                "manual-stage-watcher:",
+                "spinning-drop-manual-run-generation:",
+            )
+        )
+        for key in context.session.state
+    )
+
+
+def _capture_path_with_daily_sequence(
+    capture_folder,
+    prefix: str,
+):
+    """
+    Build one capture path using a per-prefix daily sequence.
+
+    New format:
+        <prefix>_YYYYMMDD_HHMMSS_001.jpg
+        <prefix>_YYYYMMDD_HHMMSS_002.jpg
+
+    The sequence resets automatically when the date changes.
+    Older microsecond-style filenames are ignored.
+    """
+
+    now = datetime.now()
+
+    date_text = now.strftime(
+        "%Y%m%d"
+    )
+
+    time_text = now.strftime(
+        "%H%M%S"
+    )
+
+    # IMPORTANT:
+    # This regex uses real digit tokens (\d), not escaped literal "\\d".
+    pattern = re.compile(
+        rf"^{re.escape(prefix)}_{date_text}_\d{{6}}_(\d{{3}})\.jpg$"
+    )
+
+    last_sequence = 0
+
+    for existing_path in capture_folder.glob(
+        f"{prefix}_{date_text}_*.jpg"
+    ):
+        match = pattern.fullmatch(
+            existing_path.name
+        )
+
+        if match:
+            last_sequence = max(
+                last_sequence,
+                int(
+                    match.group(1)
+                ),
+            )
+
+    sequence = (
+        last_sequence
+        + 1
+    )
+
+    return (
+        capture_folder
+        / (
+            f"{prefix}_"
+            f"{date_text}_"
+            f"{time_text}_"
+            f"{sequence:03d}.jpg"
+        )
     )
 
 
@@ -768,7 +957,8 @@ def spinning_drop_stage_watcher(
     """
     Event-driven table builder.
 
-    All stage timing belongs to Arduino firmware.
+    Official stage rows are created from the mean of exactly 10 saved
+    stage samples. Arduino still owns all stage timing.
     """
 
     headers = [
@@ -781,16 +971,6 @@ def spinning_drop_stage_watcher(
         "IFT N/m",
         "IFT mN/m",
     ]
-
-    measured = (
-        "diameter_px",
-        "diameter_mm",
-        "delta_rho",
-        "omega_squared",
-        "radius_cubed",
-        "ift_N_m",
-        "ift_mN_m",
-    )
 
     state_key = (
         f"stage-watcher:"
@@ -805,217 +985,136 @@ def spinning_drop_stage_watcher(
             "s": "IDLE",
             "rows": [],
             "last_target": None,
+            "sample_rpm": None,
+            "samples": [],
+            "last_completed_rpm": None,
         },
     )
 
-    def result(
-        state_label: str | None = None,
-        error: ErrorCluster | None = None,
-    ) -> dict[str, object]:
-
+    def result(state_label=None, error=None):
         return {
-            "table_data": [
-                headers,
-                *state["rows"],
-            ],
-            "state": (
-                state_label
-                or state["s"]
-            ),
-            "error": (
-                error
-                if error is not None
-                else ErrorCluster()
-            ),
+            "table_data": [headers, *state["rows"]],
+            "state": state_label or state["s"],
+            "error": error if error is not None else ErrorCluster(),
         }
 
-    run = bool(
-        context.inputs["run"]
-    )
+    run = bool(context.inputs["run"])
 
     if not run:
-
-        state.update(
-            {
-                "s": "IDLE",
-                "last_target": None,
-            }
-        )
-
+        state.update({
+            "s": "IDLE",
+            "last_target": None,
+            "sample_rpm": None,
+            "samples": [],
+        })
         return result()
 
-    if (
-        context.inputs[
-            "error"
-        ].status
-    ):
-
+    if context.inputs["error"].status:
         state["s"] = "ERROR"
-
         return result(
             "ERROR",
-            ErrorCluster(
-                True,
-                66,
-                "serial fault: watcher halted "
-                f"({context.inputs['error'].source})",
-            ),
+            ErrorCluster(True, 66, "serial fault: watcher halted " f"({context.inputs['error'].source})"),
         )
 
-    if bool(
-        context.inputs["stalled"]
-    ):
-
+    if bool(context.inputs["stalled"]):
         state["s"] = "ERROR"
-
-        return result(
-            "ERROR",
-            ErrorCluster(
-                True,
-                67,
-                "RPM stall detected: watcher halted",
-            ),
-        )
+        return result("ERROR", ErrorCluster(True, 67, "RPM stall detected: watcher halted"))
 
     if state["s"] == "MAX_RPM_REACHED":
-
         return result(
             "MAX_RPM_REACHED",
-            ErrorCluster(
-                True,
-                68,
-                "Maximum RPM 6000 reached. "
-                "Measurement completed. "
-                "Start a new run to continue.",
-            ),
+            ErrorCluster(True, 68, "Maximum RPM 6000 reached. Measurement completed. Start a new run to continue."),
         )
 
     if state["s"] == "IDLE":
-
         state["s"] = "RUNNING"
-
-        # New measurement run starts with a fresh table.
         state["rows"] = []
-
-        # Arduino immediately starts at 1000 RPM.
         state["last_target"] = 1000.0
+        state["sample_rpm"] = None
+        state["samples"] = []
+        state["last_completed_rpm"] = None
+        context.session.state[_stage_measurements_key(context)] = []
+        context.runtime.gmj_stage_measurements = []
 
     if state["s"] == "RUNNING":
 
-        def snapshot(
-            completed_rpm: float,
-        ) -> list[float]:
-
-            row = [
-                float(
-                    completed_rpm
-                )
-            ] + [
-                float(
-                    context.inputs[port]
-                )
-                for port
-                in measured
-            ]
-
-            return (
-                row
-                if all(
-                    math.isfinite(value)
-                    for value
-                    in row
-                )
-                else []
-            )
-
-        if bool(
-            context.inputs[
-                "stage_changed"
-            ]
-        ):
-
-            new_target = float(
-                context.inputs[
-                    "current_target_rpm"
-                ]
-            )
-
-            if (
-                state[
-                    "last_target"
-                ]
-                is not None
-            ):
-
-                row = snapshot(
-                    float(
-                        state[
-                            "last_target"
-                        ]
-                    )
-                )
-
-                if row:
-                    state["rows"].append(
-                        row
-                    )
-
-            state[
-                "last_target"
-            ] = new_target
-
-            # Request ONE automatic Picture Oil snapshot when the
-            # Arduino enters a new 1000-RPM stage.
-            #
-            # Example:
-            # 1000 -> 2000  => save stage_2000rpm_....jpg
-            # 2000 -> 3000  => save stage_3000rpm_....jpg
+        if bool(context.inputs["stage_changed"]):
+            new_target = float(context.inputs["current_target_rpm"])
+            state["last_target"] = new_target
             if new_target > 0.0:
-                context.session.state[
-                    _stage_capture_key(context)
-                ] = int(
-                    round(new_target)
+                context.session.state[_stage_capture_key(context)] = int(round(new_target))
+
+        sample_event = context.session.state.pop(_stage_sample_event_key(context), None)
+
+        if sample_event is not None:
+            try:
+                sample_rpm = float(sample_event["rpm"])
+                sample_index = int(sample_event["sample_index"])
+                sample_path = str(sample_event["path"])
+                diameter_px = float(
+                    context.inputs["diameter_px"]
                 )
 
-        if bool(
-            context.inputs[
-                "autostop"
-            ]
-        ):
-
-            if (
-                state[
-                    "last_target"
-                ]
-                is not None
-            ):
-
-                row = snapshot(
-                    float(
-                        state[
-                            "last_target"
-                        ]
-                    )
+                diameter_mm = float(
+                    context.inputs["diameter_mm"]
                 )
 
-                if row:
-                    state["rows"].append(
-                        row
+                scale_factor_mm_per_px = (
+                    diameter_mm
+                    / diameter_px
+                    if (
+                        math.isfinite(diameter_px)
+                        and diameter_px > 0.0
+                        and math.isfinite(diameter_mm)
+                        and diameter_mm > 0.0
                     )
+                    else 0.0
+                )
 
-            state["s"] = (
-                "MAX_RPM_REACHED"
-            )
+                sample = {
+                    "rpm": sample_rpm,
+                    "sample": sample_index,
+                    "diameter_px": diameter_px,
+                    "diameter_mm": diameter_mm,
+                    "scale_factor_mm_per_px": scale_factor_mm_per_px,
+                    "delta_rho": float(context.inputs["delta_rho"]),
+                    "capture_file": sample_path,
+                }
+            except (KeyError, TypeError, ValueError):
+                sample = None
+                sample_rpm = 0.0
 
+            if sample is not None:
+                if state["sample_rpm"] != sample_rpm:
+                    state["sample_rpm"] = sample_rpm
+                    state["samples"] = []
+
+                state["samples"].append(sample)
+
+                if len(state["samples"]) == 10:
+                    summary = _stage_summary_from_samples(sample_rpm, state["samples"])
+                    if summary is not None and state["last_completed_rpm"] != sample_rpm:
+                        row, statistics = summary
+                        state["rows"].append(row)
+                        stage_record = {
+                            "rpm": sample_rpm,
+                            "samples": [dict(item) for item in state["samples"]],
+                            "statistics": statistics,
+                            "summary_row": list(row),
+                        }
+                        history = context.session.state.setdefault(_stage_measurements_key(context), [])
+                        history.append(stage_record)
+                        context.runtime.gmj_stage_measurements = [dict(record) for record in history]
+                        state["last_completed_rpm"] = sample_rpm
+
+                    state["sample_rpm"] = None
+                    state["samples"] = []
+
+        if bool(context.inputs["autostop"]):
+            state["s"] = "MAX_RPM_REACHED"
             return result(
                 "MAX_RPM_REACHED",
-                ErrorCluster(
-                    True,
-                    68,
-                    "Maximum RPM 6000 reached. "
-                    "Measurement completed. "
-                    "Start a new run to continue.",
-                ),
+                ErrorCluster(True, 68, "Maximum RPM 6000 reached. Measurement completed. Start a new run to continue."),
             )
 
     return result()
@@ -1033,39 +1132,15 @@ def camera_capture_dual_mode(
 ):
 
     """
-    Shared handler for Oil live camera and Reference snapshot camera.
+    Shared Oil-live / Reference-snapshot camera handler.
 
-    Behaviour is determined automatically from the INITIAL trigger state.
+    Stage measurement:
+        - keep a stage request pending until actual RPM is within ±100 RPM
+        - save exactly 10 images, spaced 0.4 s apart, without sleep()
+        - emit one measurement event per saved image
+        - show the 10th image in Picture Comparison
 
-    Oil:
-        capture_trigger starts True.
-        This node becomes LIVE and grabs the latest cached camera frame
-        every graph iteration.
-
-    Reference:
-        capture_trigger starts False.
-        This node becomes SNAPSHOT mode.
-
-        On first execution it grabs one bootstrap frame so downstream
-        image-processing nodes never receive None.
-
-        After that it updates ONLY on a rising edge:
-            False -> True
-
-        Holding the button True does NOT continuously re-capture.
-
-        When the trigger returns False, the last captured reference
-        frame remains available.
-
-    Additional behaviour:
-        Every new Reference snapshot captured by the operator is also
-        saved automatically into:
-
-            Documents/GMJ PyLabView/Captures/
-
-        Example filename:
-
-            reference_20260826_162500_123456.jpg
+    Reference capture remains one manual snapshot per rising edge.
     """
 
     key = (
@@ -1075,348 +1150,328 @@ def camera_capture_dual_mode(
         f"{context.node.id}"
     )
 
-    trigger = bool(
-        context.inputs[
-            "capture_trigger"
-        ]
-    )
+    trigger = bool(context.inputs["capture_trigger"])
 
     state = context.session.state.setdefault(
         key,
         {
             "frame": None,
             "last_trigger": trigger,
-            "capture_behavior": (
-                "live"
-                if trigger
-                else "snapshot"
-            ),
+            "capture_behavior": "live" if trigger else "snapshot",
             "initialized": False,
             "last_saved_path": None,
             "last_stage_snapshot_path": None,
-            "initial_1000_capture_done": False,
+            "last_auto_stage_target": None,
             "previous_run": False,
+            "stage_burst": None,
         },
     )
 
-    behavior = state[
-        "capture_behavior"
-    ]
-
-    # ============================================================
-    # LIVE MODE
-    # Used by Picture Oil
-    # ============================================================
+    behavior = state["capture_behavior"]
 
     if behavior == "live":
+        telemetry_snapshot = context.session.state.get(_telemetry_snapshot_key(context), {})
+        telemetry_run = bool(telemetry_snapshot.get("run", False))
+        telemetry_rpm = float(telemetry_snapshot.get("rpm", 0.0))
+        telemetry_target = float(telemetry_snapshot.get("target", 0.0))
 
-        telemetry_snapshot = context.session.state.get(
-            _telemetry_snapshot_key(context),
-            {}
-        )
+        if telemetry_run and not state["previous_run"]:
+            state["last_auto_stage_target"] = None
+            state["stage_burst"] = None
 
-        telemetry_run = bool(
-            telemetry_snapshot.get(
-                "run",
-                False,
-            )
-        )
+        if not telemetry_run:
+            state["stage_burst"] = None
 
-        telemetry_rpm = float(
-            telemetry_snapshot.get(
-                "rpm",
-                0.0,
-            )
-        )
-
-        telemetry_target = float(
-            telemetry_snapshot.get(
-                "target",
-                0.0,
-            )
-        )
-
-        # New measurement run:
-        # allow one fresh automatic capture for the first 1000-RPM stage.
+        # Standard Mode:
+        # arm exactly one 10-photo burst for every firmware target
+        # (1000, 2000, ... 6000). The request is armed as soon as the
+        # target changes, while the existing burst logic still waits
+        # until actual RPM is within ±100 RPM before capturing.
         if (
             telemetry_run
-            and not state["previous_run"]
-        ):
-            state[
-                "initial_1000_capture_done"
-            ] = False
-
-        # Initial 1000-RPM stage does not have a previous stage transition,
-        # so request its snapshot once actual RPM has reached the same
-        # stability band already used by the Arduino firmware: ±100 RPM.
-        if (
-            telemetry_run
-            and not state[
-                "initial_1000_capture_done"
-            ]
-            and telemetry_target == 1000.0
-            and abs(
-                telemetry_rpm
-                - telemetry_target
-            ) < 100.0
+            and not _manual_mode_active(
+                context
+            )
+            and telemetry_target in (
+                1000.0,
+                2000.0,
+                3000.0,
+                4000.0,
+                5000.0,
+                6000.0,
+            )
+            and state["last_auto_stage_target"]
+            != telemetry_target
         ):
             context.session.state[
-                _stage_capture_key(context)
-            ] = 1000
+                _stage_capture_key(
+                    context
+                )
+            ] = int(
+                round(
+                    telemetry_target
+                )
+            )
 
             state[
-                "initial_1000_capture_done"
-            ] = True
+                "last_auto_stage_target"
+            ] = telemetry_target
 
         state["previous_run"] = telemetry_run
 
-        frame = (
-            context.runtime.vision.capture_source(
-                context.inputs["mode"],
-                context.inputs[
-                    "device_index"
-                ],
-                context.inputs[
-                    "network_url"
-                ],
-                context.inputs[
-                    "timeout_seconds"
-                ],
-            )
+        frame = context.runtime.vision.capture_source(
+            context.inputs["mode"],
+            context.inputs["device_index"],
+            context.inputs["network_url"],
+            context.inputs["timeout_seconds"],
         )
 
         if frame is not None:
-
             state["frame"] = frame
+            pending_stage = context.session.state.get(_stage_capture_key(context))
 
-            # ----------------------------------------------------
-            # AUTO SNAPSHOT ON RPM STAGE CHANGE
-            # ----------------------------------------------------
-            stage_rpm = context.session.state.pop(
-                _stage_capture_key(context),
-                None,
-            )
+            if state["stage_burst"] is None and pending_stage is not None:
+                requested_rpm = int(round(float(pending_stage)))
+                target_matches = int(round(telemetry_target)) == requested_rpm
+                rpm_stable = abs(telemetry_rpm - float(requested_rpm)) < 100.0
 
-            if stage_rpm is not None:
+                if telemetry_run and requested_rpm > 0 and target_matches and rpm_stable:
+                    context.session.state.pop(_stage_capture_key(context), None)
+                    state["stage_burst"] = {
+                        "rpm": requested_rpm,
+                        "count": 0,
+                        "next_capture_at": context.runtime.clock(),
+                    }
 
-                capture_folder = (
-                    captures_dir()
-                )
+            burst = state["stage_burst"]
+            sample_event_pending = _stage_sample_event_key(context) in context.session.state
 
-                capture_folder.mkdir(
-                    parents=True,
-                    exist_ok=True,
-                )
-
-                timestamp = (
-                    datetime.now()
-                    .strftime(
-                        "%Y%m%d_%H%M%S_%f"
+            if burst is not None and not sample_event_pending:
+                now = context.runtime.clock()
+                if now >= float(burst["next_capture_at"]):
+                    stage_rpm = int(burst["rpm"])
+                    sample_index = int(burst["count"]) + 1
+                    active_session = _active_session_root(context)
+                    capture_folder = (
+                        session_stage_dir(active_session, stage_rpm)
+                        if active_session is not None
+                        else captures_dir()
                     )
-                )
-
-                image_path = (
-                    capture_folder
-                    / (
-                        f"stage_"
-                        f"{int(stage_rpm)}rpm_"
-                        f"{timestamp}.jpg"
+                    capture_folder.mkdir(parents=True, exist_ok=True)
+                    image_path = _capture_path_with_daily_sequence(
+                        capture_folder,
+                        f"stage_{stage_rpm}rpm",
                     )
-                )
+                    context.runtime.vision.save(frame, image_path)
+                    state["last_saved_path"] = str(image_path)
 
-                context.runtime.vision.save(
-                    frame,
-                    image_path,
-                )
+                    analysis_requests = getattr(
+                        context.runtime,
+                        "gmj_analysis_capture_requests",
+                        None,
+                    )
 
-                state[
-                    "last_saved_path"
-                ] = str(
-                    image_path
-                )
+                    if not isinstance(
+                        analysis_requests,
+                        list,
+                    ):
+                        analysis_requests = []
+                        context.runtime.gmj_analysis_capture_requests = (
+                            analysis_requests
+                        )
 
-                # Make the exact same automatic stage snapshot
-                # available to Picture Comparison.
-                context.session.state[
-                    _stage_snapshot_frame_key(context)
-                ] = {
-                    "frame": frame,
-                    "rpm": int(
-                        stage_rpm
-                    ),
-                    "path": str(
-                        image_path
-                    ),
-                }
+                    # Display-only snapshot for Picture Comparison / Grafik Kawat.
+                    #
+                    # IMPORTANT:
+                    # The frozen reference/calibration camera remains untouched.
+                    # This only prepares the exact stage sample frame and its
+                    # matching intensity profile for the Front Panel display.
+                    display_wire_profile = None
+
+                    try:
+                        wire_orientation = str(
+                            context.controls.get(
+                                "wire_orientation",
+                                "vertical",
+                            )
+                        )
+
+                        wire_threshold = 127.0
+                        wire_foreground = "dark"
+
+                        if (
+                            context.project is not None
+                            and context.caller_vi is not None
+                            and context.caller_vi in context.project.vis
+                        ):
+                            wire_edge_node = (
+                                context.project.vis[
+                                    context.caller_vi
+                                ].graph.nodes.get(
+                                    "wire_edge"
+                                )
+                            )
+
+                            if wire_edge_node is not None:
+                                wire_threshold = float(
+                                    wire_edge_node.properties.get(
+                                        "threshold",
+                                        wire_threshold,
+                                    )
+                                )
+                                wire_foreground = str(
+                                    wire_edge_node.properties.get(
+                                        "foreground",
+                                        wire_foreground,
+                                    )
+                                )
+
+                        display_wire_result = (
+                            context.runtime.vision.edge_intensity_profile(
+                                frame,
+                                wire_orientation,
+                                wire_threshold,
+                                wire_foreground,
+                            )
+                        )
+
+                        profile_value = display_wire_result.get(
+                            "intensity_profile"
+                        )
+
+                        if isinstance(
+                            profile_value,
+                            list,
+                        ):
+                            display_wire_profile = list(
+                                profile_value
+                            )
+
+                    except (
+                        KeyError,
+                        RuntimeError,
+                        TypeError,
+                        ValueError,
+                    ):
+                        # Display-only enhancement must never interrupt the
+                        # existing stage capture / measurement pipeline.
+                        display_wire_profile = None
+
+                    analysis_requests.append(
+                        {
+                            "rpm": stage_rpm,
+                            "sample_index": sample_index,
+                            "capture_file": str(image_path),
+                            "display_frame": frame,
+                            "display_wire_profile": display_wire_profile,
+                        }
+                    )
+
+                    # IMPORTANT:
+                    # The measurement pipeline must see the exact frame that
+                    # belongs to this saved sample BEFORE the sample event is
+                    # consumed by the watcher. Previously Picture Comparison
+                    # was only updated on sample #10, so samples #1..#9 could
+                    # be paired with stale diameter values.
+                    context.session.state[
+                        _stage_snapshot_frame_key(
+                            context
+                        )
+                    ] = {
+                        "frame": frame,
+                        "rpm": stage_rpm,
+                        "path": str(image_path),
+                    }
+
+                    context.session.state[
+                        _stage_sample_event_key(
+                            context
+                        )
+                    ] = {
+                        "rpm": stage_rpm,
+                        "sample_index": sample_index,
+                        "path": str(image_path),
+                    }
+
+                    burst["count"] = sample_index
+                    burst["next_capture_at"] = now + 0.4
+
+                    if sample_index >= 10:
+                        state["stage_burst"] = None
 
         state["last_trigger"] = trigger
         state["initialized"] = True
-
         return state["frame"]
 
-    # ============================================================
-    # SNAPSHOT MODE
-    # Used by Picture Comparison / Reference
-    # ============================================================
-
-    # ------------------------------------------------------------
-    # SHOW LATEST AUTOMATIC STAGE SNAPSHOT
-    #
-    # Picture Oil remains live.
-    # Picture Comparison updates only when a new automatic stage
-    # snapshot is created, or when the operator manually captures
-    # a new Reference image.
-    # ------------------------------------------------------------
-
-    stage_snapshot = context.session.state.get(
-        _stage_snapshot_frame_key(context)
+    is_reference_calibration_camera = bool(
+        context.node.properties.get(
+            "reference_calibration_camera",
+            False,
+        )
     )
 
-    if stage_snapshot is not None:
-
-        stage_path = stage_snapshot.get(
-            "path"
+    # The calibration/reference camera must remain frozen on the operator's
+    # captured reference image. Automatic stage samples must not replace it,
+    # otherwise wire diameter and scale factor change during a measurement.
+    if not is_reference_calibration_camera:
+        stage_snapshot = context.session.state.get(
+            _stage_snapshot_frame_key(context)
         )
 
-        if (
-            stage_path
-            and stage_path
-            != state.get(
-                "last_stage_snapshot_path"
-            )
-        ):
+        if stage_snapshot is not None:
+            stage_path = stage_snapshot.get("path")
 
-            stage_frame = stage_snapshot.get(
-                "frame"
-            )
-
-            if stage_frame is not None:
-
-                state["frame"] = stage_frame
-
-                state[
+            if (
+                stage_path
+                and stage_path
+                != state.get(
                     "last_stage_snapshot_path"
-                ] = stage_path
+                )
+            ):
+                stage_frame = stage_snapshot.get(
+                    "frame"
+                )
 
-    # ------------------------------------------------------------
-    # Bootstrap one valid frame.
-    #
-    # Important:
-    # Bootstrap frame is NOT saved to disk.
-    #
-    # We only save when operator explicitly presses
-    # Capture Reference.
-    # ------------------------------------------------------------
+                if stage_frame is not None:
+                    state["frame"] = stage_frame
+                    state["last_stage_snapshot_path"] = stage_path
 
     if not state["initialized"]:
-
-        frame = (
-            context.runtime.vision.capture_source(
-                context.inputs["mode"],
-                context.inputs[
-                    "device_index"
-                ],
-                context.inputs[
-                    "network_url"
-                ],
-                context.inputs[
-                    "timeout_seconds"
-                ],
-            )
+        frame = context.runtime.vision.capture_source(
+            context.inputs["mode"],
+            context.inputs["device_index"],
+            context.inputs["network_url"],
+            context.inputs["timeout_seconds"],
         )
-
         if frame is not None:
-
             state["frame"] = frame
-
         state["initialized"] = True
-
-        # Keep current trigger as reference for edge detection.
         state["last_trigger"] = trigger
-
         return state["frame"]
 
-    # ============================================================
-    # Detect button rising edge
-    #
-    # False -> True = take ONE reference snapshot.
-    # ============================================================
-
-    rising_edge = (
-        trigger
-        and not bool(
-            state[
-                "last_trigger"
-            ]
-        )
-    )
+    rising_edge = trigger and not bool(state["last_trigger"])
 
     if rising_edge:
-
-        frame = (
-            context.runtime.vision.capture_source(
-                context.inputs["mode"],
-                context.inputs[
-                    "device_index"
-                ],
-                context.inputs[
-                    "network_url"
-                ],
-                context.inputs[
-                    "timeout_seconds"
-                ],
-            )
+        frame = context.runtime.vision.capture_source(
+            context.inputs["mode"],
+            context.inputs["device_index"],
+            context.inputs["network_url"],
+            context.inputs["timeout_seconds"],
         )
-
         if frame is not None:
-
-            # ====================================================
-            # HOLD REFERENCE FRAME
-            # ====================================================
-
             state["frame"] = frame
-
-            # ====================================================
-            # SAVE REFERENCE PHOTO
-            # ====================================================
-
+            active_session = _active_session_root(context)
             capture_folder = (
-                captures_dir()
+                session_reference_dir(active_session)
+                if active_session is not None
+                else captures_dir()
             )
-
-            capture_folder.mkdir(
-                parents=True,
-                exist_ok=True,
-            )
-
-            timestamp = (
-                datetime.now()
-                .strftime(
-                    "%Y%m%d_%H%M%S_%f"
-                )
-            )
-
-            image_path = (
-                capture_folder
-                / (
-                    f"reference_"
-                    f"{timestamp}.jpg"
-                )
-            )
-
-            context.runtime.vision.save(
-                frame,
-                image_path,
-            )
-
-            state[
-                "last_saved_path"
-            ] = str(
-                image_path
-            )
+            capture_folder.mkdir(parents=True, exist_ok=True)
+            image_path = _capture_path_with_daily_sequence(capture_folder, "reference")
+            context.runtime.vision.save(frame, image_path)
+            state["last_saved_path"] = str(image_path)
 
     state["last_trigger"] = trigger
-
     return state["frame"]
 
 

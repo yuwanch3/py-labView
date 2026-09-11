@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+from pathlib import Path
 import tkinter as tk
 from tkinter import simpledialog
 from typing import Any, Callable
@@ -63,6 +64,7 @@ class PanelDesigner(tk.Canvas):
         }
         self._persistent_fast_display_tags: dict[str, str] = {}
         self._persistent_fast_display_text_items: dict[str, int] = {}
+        self._persistent_fast_display_bar_items: dict[str, int] = {}
         self._persistent_fast_display_values: dict[str, str] = {}
         self._persistent_fast_display_scaled = False
 
@@ -102,6 +104,7 @@ class PanelDesigner(tk.Canvas):
         self.delete("persistent_fast_display")
         self._persistent_fast_display_tags.clear()
         self._persistent_fast_display_text_items.clear()
+        self._persistent_fast_display_bar_items.clear()
         self._persistent_fast_display_values.clear()
         self._persistent_fast_display_scaled = False
 
@@ -138,6 +141,7 @@ class PanelDesigner(tk.Canvas):
             self.delete("persistent_fast_display")
             self._persistent_fast_display_tags.clear()
             self._persistent_fast_display_text_items.clear()
+            self._persistent_fast_display_bar_items.clear()
             self._persistent_fast_display_values.clear()
             self._persistent_fast_display_scaled = False
 
@@ -237,7 +241,7 @@ class PanelDesigner(tk.Canvas):
         self,
         item: dict[str, Any],
     ) -> bool:
-        """Create/update one of the five requested persistent display widgets."""
+        """Create/update persistent fast displays without full redraw."""
 
         if not self._is_fast_display_item(
             item
@@ -256,13 +260,12 @@ class PanelDesigner(tk.Canvas):
             item["kind"].replace("_", " ").title(),
         )
 
-        value = self.values.get(
-            node_id,
-            "--",
-        )
         value = self._display_value(
             node_id,
-            value,
+            self.values.get(
+                node_id,
+                "--",
+            ),
         )
         displayed = self._format(
             value
@@ -270,6 +273,37 @@ class PanelDesigner(tk.Canvas):
 
         persistent_tag = f"persistent_fast_display:{item_id}"
         panel_tag = f"panel:{item_id}"
+
+        # RPM/PWM are gauges by configuration even before the first
+        # numeric runtime value arrives. At startup their value can still
+        # be "--", so create an empty gauge immediately and update it
+        # in place later.
+        is_gauge = (
+            node_id in {
+                "rpm_display",
+                "pwm_display",
+            }
+            and item["properties"].get(
+                "display_type",
+                "",
+            )
+            == "gauge"
+        )
+
+        numeric_value = (
+            float(value)
+            if (
+                is_gauge
+                and isinstance(
+                    value,
+                    (int, float),
+                )
+                and math.isfinite(
+                    float(value)
+                )
+            )
+            else None
+        )
 
         if item_id not in self._persistent_fast_display_tags:
             self.create_rectangle(
@@ -303,7 +337,80 @@ class PanelDesigner(tk.Canvas):
                 ),
             )
 
-            if node_id in {"wifi", "wifi_ip"}:
+            if is_gauge:
+                left = x + 12
+                right = x + w - 12
+                top = y + h / 2
+                bottom = y + h / 2 + 18
+
+                self.create_rectangle(
+                    left,
+                    top,
+                    right,
+                    bottom,
+                    fill="#ddd",
+                    outline="#333",
+                    tags=(
+                        "persistent_fast_display",
+                        persistent_tag,
+                        panel_tag,
+                    ),
+                )
+
+                fraction = (
+                    gauge_fraction(
+                        numeric_value,
+                        item["properties"].get(
+                            "minimum",
+                            0,
+                        ),
+                        item["properties"].get(
+                            "maximum",
+                            100,
+                        ),
+                    )
+                    if numeric_value is not None
+                    else 0.0
+                )
+
+                bar_item = self.create_rectangle(
+                    left,
+                    top,
+                    left
+                    + (
+                        right
+                        - left
+                    )
+                    * fraction,
+                    bottom,
+                    fill="#00866a",
+                    outline="",
+                    tags=(
+                        "persistent_fast_display",
+                        persistent_tag,
+                        panel_tag,
+                    ),
+                )
+
+                text_item = self.create_text(
+                    x + w / 2,
+                    bottom + 12,
+                    text=displayed,
+                    font=self._font(
+                        10,
+                    ),
+                    tags=(
+                        "persistent_fast_display",
+                        persistent_tag,
+                        panel_tag,
+                    ),
+                )
+
+                self._persistent_fast_display_bar_items[
+                    item_id
+                ] = bar_item
+
+            elif node_id in {"wifi", "wifi_ip"}:
                 text_item = self.create_text(
                     x + 10,
                     y + h / 2 + 10,
@@ -325,6 +432,7 @@ class PanelDesigner(tk.Canvas):
                         panel_tag,
                     ),
                 )
+
             else:
                 text_item = self.create_text(
                     x + w / 2,
@@ -343,9 +451,15 @@ class PanelDesigner(tk.Canvas):
                     ),
                 )
 
-            self._persistent_fast_display_tags[item_id] = persistent_tag
-            self._persistent_fast_display_text_items[item_id] = text_item
-            self._persistent_fast_display_values[item_id] = displayed
+            self._persistent_fast_display_tags[
+                item_id
+            ] = persistent_tag
+            self._persistent_fast_display_text_items[
+                item_id
+            ] = text_item
+            self._persistent_fast_display_values[
+                item_id
+            ] = displayed
 
             return True
 
@@ -365,9 +479,1330 @@ class PanelDesigner(tk.Canvas):
                     text=displayed,
                 )
 
-            self._persistent_fast_display_values[item_id] = displayed
+            if is_gauge:
+                bar_item = self._persistent_fast_display_bar_items.get(
+                    item_id
+                )
+
+                if bar_item is not None:
+                    left = x + 12
+                    right = x + w - 12
+                    top = y + h / 2
+                    bottom = y + h / 2 + 18
+
+                    fraction = (
+                        gauge_fraction(
+                            numeric_value,
+                            item["properties"].get(
+                                "minimum",
+                                0,
+                            ),
+                            item["properties"].get(
+                                "maximum",
+                                100,
+                            ),
+                        )
+                        if numeric_value is not None
+                        else 0.0
+                    )
+
+                    self.coords(
+                        bar_item,
+                        left,
+                        top,
+                        left
+                        + (
+                            right
+                            - left
+                        )
+                        * fraction,
+                        bottom,
+                    )
+
+            self._persistent_fast_display_values[
+                item_id
+            ] = displayed
 
         return True
+
+    def freeze_analysis_snapshot(
+        self,
+    ) -> dict[str, Any] | None:
+        """
+        Freeze only the data needed by the Analysis PNG.
+
+        This is intentionally lightweight and runs on the Tk/UI thread.
+        Rendering and PNG compression can then happen in a background worker
+        without reading live Front Panel state later.
+        """
+
+        def normalized_label(
+            item: dict[str, Any],
+        ) -> str:
+            label = str(
+                item["properties"].get(
+                    "label",
+                    "",
+                )
+            ).strip().casefold()
+
+            return (
+                label
+                .replace("ω", "w")
+                .replace("²", "2")
+                .replace("³", "3")
+                .replace(" ", "")
+            )
+
+        target_labels = {
+            "grafikoil",
+            "grafikkawat",
+            "w2",
+            "r3",
+            "iftn/m",
+            "iftmn/m",
+        }
+
+        frozen_items: list[dict[str, Any]] = []
+
+        for item in self.panel["items"]:
+
+            if normalized_label(
+                item
+            ) not in target_labels:
+                continue
+
+            node_id = item[
+                "terminal_node_id"
+            ]
+
+            frozen_item: dict[str, Any] = {
+                "kind": item["kind"],
+                "terminal_node_id": node_id,
+                "z_index": item["z_index"],
+                "bounds": dict(
+                    item["bounds"]
+                ),
+                "properties": dict(
+                    item["properties"]
+                ),
+            }
+
+            if item["kind"] == "chart":
+                frozen_item[
+                    "_analysis_numbers"
+                ] = tuple(
+                    self.chart_history.get(
+                        node_id,
+                        [],
+                    )
+                )
+            else:
+                value = self._display_value(
+                    node_id,
+                    self.values.get(
+                        node_id,
+                        "--",
+                    ),
+                )
+
+                frozen_item[
+                    "_analysis_displayed"
+                ] = self._format(
+                    value
+                )
+
+            frozen_items.append(
+                frozen_item
+            )
+
+        if len(frozen_items) < 6:
+            return None
+
+        return {
+            "items": tuple(
+                frozen_items
+            ),
+        }
+
+    @staticmethod
+    def render_analysis_snapshot(
+        snapshot_data: dict[str, Any],
+        output_path,
+    ) -> bool:
+        """
+        Render one previously frozen Analysis snapshot.
+
+        This method uses only plain frozen Python data plus Win32 GDI. It does
+        not read Tk widgets, live Front Panel values, zoom, or scrolling state,
+        so it is safe to run in the background worker.
+        """
+
+        matched = list(
+            snapshot_data.get(
+                "items",
+                (),
+            )
+        )
+
+        if len(matched) < 6:
+            return False
+
+        document_left = min(
+            float(item["bounds"]["x"])
+            for item in matched
+        )
+        document_top = min(
+            float(item["bounds"]["y"])
+            for item in matched
+        )
+        document_right = max(
+            float(item["bounds"]["x"])
+            + float(item["bounds"]["width"])
+            for item in matched
+        )
+        document_bottom = max(
+            float(item["bounds"]["y"])
+            + float(item["bounds"]["height"])
+            for item in matched
+        )
+
+        padding = 6
+
+        width = max(
+            1,
+            int(
+                math.ceil(
+                    document_right
+                    - document_left
+                )
+            )
+            + padding * 2,
+        )
+
+        height = max(
+            1,
+            int(
+                math.ceil(
+                    document_bottom
+                    - document_top
+                )
+            )
+            + padding * 2,
+        )
+
+        try:
+            import ctypes
+            import struct
+            import zlib
+            from ctypes import wintypes
+
+            user32 = ctypes.windll.user32
+            gdi32 = ctypes.windll.gdi32
+
+            # Win32 GDI handles are pointer-sized on 64-bit Windows.
+            # ctypes otherwise assumes c_int for unspecified parameters,
+            # which truncates HDC/HBITMAP/HGDIOBJ values and can raise:
+            # OverflowError: int too long to convert.
+            HANDLE = ctypes.c_void_p
+
+            user32.GetDC.argtypes = [
+                wintypes.HWND,
+            ]
+            user32.GetDC.restype = wintypes.HDC
+
+            user32.ReleaseDC.argtypes = [
+                wintypes.HWND,
+                wintypes.HDC,
+            ]
+            user32.ReleaseDC.restype = ctypes.c_int
+
+            user32.FillRect.argtypes = [
+                wintypes.HDC,
+                ctypes.POINTER(
+                    wintypes.RECT
+                ),
+                wintypes.HBRUSH,
+            ]
+            user32.FillRect.restype = ctypes.c_int
+
+            user32.DrawTextW.argtypes = [
+                wintypes.HDC,
+                wintypes.LPCWSTR,
+                ctypes.c_int,
+                ctypes.POINTER(
+                    wintypes.RECT
+                ),
+                ctypes.c_uint,
+            ]
+            user32.DrawTextW.restype = ctypes.c_int
+
+            gdi32.CreateCompatibleDC.argtypes = [
+                wintypes.HDC,
+            ]
+            gdi32.CreateCompatibleDC.restype = wintypes.HDC
+
+            gdi32.CreateCompatibleBitmap.argtypes = [
+                wintypes.HDC,
+                ctypes.c_int,
+                ctypes.c_int,
+            ]
+            gdi32.CreateCompatibleBitmap.restype = wintypes.HBITMAP
+
+            gdi32.SelectObject.argtypes = [
+                wintypes.HDC,
+                HANDLE,
+            ]
+            gdi32.SelectObject.restype = HANDLE
+
+            gdi32.CreateSolidBrush.argtypes = [
+                wintypes.COLORREF,
+            ]
+            gdi32.CreateSolidBrush.restype = wintypes.HBRUSH
+
+            gdi32.CreatePen.argtypes = [
+                ctypes.c_int,
+                ctypes.c_int,
+                wintypes.COLORREF,
+            ]
+            gdi32.CreatePen.restype = wintypes.HPEN
+
+            gdi32.CreateFontW.argtypes = [
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_int,
+                wintypes.DWORD,
+                wintypes.DWORD,
+                wintypes.DWORD,
+                wintypes.DWORD,
+                wintypes.DWORD,
+                wintypes.DWORD,
+                wintypes.DWORD,
+                wintypes.DWORD,
+                wintypes.LPCWSTR,
+            ]
+            gdi32.CreateFontW.restype = wintypes.HFONT
+
+            gdi32.SetBkMode.argtypes = [
+                wintypes.HDC,
+                ctypes.c_int,
+            ]
+            gdi32.SetBkMode.restype = ctypes.c_int
+
+            gdi32.SetTextColor.argtypes = [
+                wintypes.HDC,
+                wintypes.COLORREF,
+            ]
+            gdi32.SetTextColor.restype = wintypes.COLORREF
+
+            gdi32.MoveToEx.argtypes = [
+                wintypes.HDC,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_void_p,
+            ]
+            gdi32.MoveToEx.restype = wintypes.BOOL
+
+            gdi32.LineTo.argtypes = [
+                wintypes.HDC,
+                ctypes.c_int,
+                ctypes.c_int,
+            ]
+            gdi32.LineTo.restype = wintypes.BOOL
+
+            gdi32.Rectangle.argtypes = [
+                wintypes.HDC,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_int,
+            ]
+            gdi32.Rectangle.restype = wintypes.BOOL
+
+            gdi32.DeleteObject.argtypes = [
+                HANDLE,
+            ]
+            gdi32.DeleteObject.restype = wintypes.BOOL
+
+            gdi32.DeleteDC.argtypes = [
+                wintypes.HDC,
+            ]
+            gdi32.DeleteDC.restype = wintypes.BOOL
+
+            TRANSPARENT = 1
+            PS_SOLID = 0
+            DT_LEFT = 0x0000
+            DT_CENTER = 0x0001
+            DT_VCENTER = 0x0004
+            DT_SINGLELINE = 0x0020
+            DT_END_ELLIPSIS = 0x00008000
+
+            def colorref(
+                red: int,
+                green: int,
+                blue: int,
+            ) -> int:
+                return (
+                    red
+                    | (green << 8)
+                    | (blue << 16)
+                )
+
+            def rgb_hex(
+                value: str,
+            ) -> tuple[int, int, int]:
+                value = value.lstrip("#")
+                return (
+                    int(value[0:2], 16),
+                    int(value[2:4], 16),
+                    int(value[4:6], 16),
+                )
+
+            def make_brush(
+                color: str,
+            ):
+                red, green, blue = rgb_hex(
+                    color
+                )
+                return gdi32.CreateSolidBrush(
+                    colorref(
+                        red,
+                        green,
+                        blue,
+                    )
+                )
+
+            def make_pen(
+                color: str,
+                width_px: int = 1,
+            ):
+                red, green, blue = rgb_hex(
+                    color
+                )
+                return gdi32.CreatePen(
+                    PS_SOLID,
+                    width_px,
+                    colorref(
+                        red,
+                        green,
+                        blue,
+                    ),
+                )
+
+            screen_dc = user32.GetDC(
+                0
+            )
+
+            if not screen_dc:
+                return False
+
+            memory_dc = gdi32.CreateCompatibleDC(
+                screen_dc
+            )
+
+            if not memory_dc:
+                user32.ReleaseDC(
+                    0,
+                    screen_dc,
+                )
+                return False
+
+            bitmap = gdi32.CreateCompatibleBitmap(
+                screen_dc,
+                width,
+                height,
+            )
+
+            if not bitmap:
+                gdi32.DeleteDC(
+                    memory_dc
+                )
+                user32.ReleaseDC(
+                    0,
+                    screen_dc,
+                )
+                return False
+
+            old_bitmap = gdi32.SelectObject(
+                memory_dc,
+                bitmap,
+            )
+
+            created_objects = []
+
+            def select_pen(
+                color: str,
+                width_px: int = 1,
+            ):
+                pen = make_pen(
+                    color,
+                    width_px,
+                )
+                created_objects.append(
+                    pen
+                )
+                return gdi32.SelectObject(
+                    memory_dc,
+                    pen,
+                )
+
+            def select_brush(
+                color: str,
+            ):
+                brush = make_brush(
+                    color
+                )
+                created_objects.append(
+                    brush
+                )
+                return gdi32.SelectObject(
+                    memory_dc,
+                    brush,
+                )
+
+            def draw_text(
+                text_value: object,
+                left: int,
+                top: int,
+                right: int,
+                bottom: int,
+                *,
+                size: int = 10,
+                bold: bool = False,
+                center: bool = False,
+            ) -> None:
+                weight = (
+                    700
+                    if bold
+                    else 400
+                )
+
+                font = gdi32.CreateFontW(
+                    -max(
+                        8,
+                        int(size * 1.35),
+                    ),
+                    0,
+                    0,
+                    0,
+                    weight,
+                    0,
+                    0,
+                    0,
+                    1,
+                    0,
+                    0,
+                    0,
+                    0,
+                    "Segoe UI",
+                )
+
+                if not font:
+                    return
+
+                created_objects.append(
+                    font
+                )
+
+                old_font = gdi32.SelectObject(
+                    memory_dc,
+                    font,
+                )
+
+                gdi32.SetBkMode(
+                    memory_dc,
+                    TRANSPARENT,
+                )
+
+                gdi32.SetTextColor(
+                    memory_dc,
+                    colorref(
+                        0,
+                        0,
+                        0,
+                    ),
+                )
+
+                rect = wintypes.RECT(
+                    left,
+                    top,
+                    right,
+                    bottom,
+                )
+
+                flags = (
+                    DT_SINGLELINE
+                    | DT_VCENTER
+                    | DT_END_ELLIPSIS
+                )
+
+                flags |= (
+                    DT_CENTER
+                    if center
+                    else DT_LEFT
+                )
+
+                user32.DrawTextW(
+                    memory_dc,
+                    str(text_value),
+                    -1,
+                    ctypes.byref(
+                        rect
+                    ),
+                    flags,
+                )
+
+                if old_font:
+                    gdi32.SelectObject(
+                        memory_dc,
+                        old_font,
+                    )
+
+            def line(
+                x1: int,
+                y1: int,
+                x2: int,
+                y2: int,
+                color: str,
+                width_px: int = 1,
+            ) -> None:
+                old_pen = select_pen(
+                    color,
+                    width_px,
+                )
+
+                gdi32.MoveToEx(
+                    memory_dc,
+                    x1,
+                    y1,
+                    None,
+                )
+
+                gdi32.LineTo(
+                    memory_dc,
+                    x2,
+                    y2,
+                )
+
+                if old_pen:
+                    gdi32.SelectObject(
+                        memory_dc,
+                        old_pen,
+                    )
+
+            def rectangle(
+                left: int,
+                top: int,
+                right: int,
+                bottom: int,
+                *,
+                fill: str,
+                outline: str,
+            ) -> None:
+                old_pen = select_pen(
+                    outline,
+                    1,
+                )
+
+                old_brush = select_brush(
+                    fill
+                )
+
+                gdi32.Rectangle(
+                    memory_dc,
+                    left,
+                    top,
+                    right,
+                    bottom,
+                )
+
+                if old_brush:
+                    gdi32.SelectObject(
+                        memory_dc,
+                        old_brush,
+                    )
+
+                if old_pen:
+                    gdi32.SelectObject(
+                        memory_dc,
+                        old_pen,
+                    )
+
+            # White off-screen background.
+            background = make_brush(
+                "#ffffff"
+            )
+            created_objects.append(
+                background
+            )
+
+            background_rect = wintypes.RECT(
+                0,
+                0,
+                width,
+                height,
+            )
+
+            user32.FillRect(
+                memory_dc,
+                ctypes.byref(
+                    background_rect
+                ),
+                background,
+            )
+
+            for item in sorted(
+                matched,
+                key=lambda entry: entry[
+                    "z_index"
+                ],
+            ):
+                bounds = item[
+                    "bounds"
+                ]
+
+                x = (
+                    int(
+                        round(
+                            float(
+                                bounds["x"]
+                            )
+                            - document_left
+                        )
+                    )
+                    + padding
+                )
+
+                y = (
+                    int(
+                        round(
+                            float(
+                                bounds["y"]
+                            )
+                            - document_top
+                        )
+                    )
+                    + padding
+                )
+
+                w = int(
+                    round(
+                        float(
+                            bounds[
+                                "width"
+                            ]
+                        )
+                    )
+                )
+
+                h = int(
+                    round(
+                        float(
+                            bounds[
+                                "height"
+                            ]
+                        )
+                    )
+                )
+
+                node_id = item[
+                    "terminal_node_id"
+                ]
+
+                label = item[
+                    "properties"
+                ].get(
+                    "label",
+                    item["kind"]
+                    .replace(
+                        "_",
+                        " ",
+                    )
+                    .title(),
+                )
+
+                rectangle(
+                    x,
+                    y,
+                    x + w,
+                    y + h,
+                    fill="#f7f7f7",
+                    outline="#777777",
+                )
+
+                draw_text(
+                    label,
+                    x + 8,
+                    y + 1,
+                    x + w - 6,
+                    y + 21,
+                    size=9,
+                    bold=True,
+                )
+
+                if item[
+                    "kind"
+                ] == "chart":
+                    numbers = list(
+                        item.get(
+                            "_analysis_numbers",
+                            (),
+                        )
+                    )
+
+                    plot_left = x + 38
+                    plot_right = x + w - 10
+                    plot_top = y + 28
+                    plot_bottom = y + h - 34
+
+                    x_min = float(
+                        item[
+                            "properties"
+                        ].get(
+                            "x_min",
+                            0,
+                        )
+                    )
+
+                    x_max = float(
+                        item[
+                            "properties"
+                        ].get(
+                            "x_max",
+                            500,
+                        )
+                    )
+
+                    y_min = float(
+                        item[
+                            "properties"
+                        ].get(
+                            "y_min",
+                            0,
+                        )
+                    )
+
+                    y_max = float(
+                        item[
+                            "properties"
+                        ].get(
+                            "y_max",
+                            300,
+                        )
+                    )
+
+                    if x_max <= x_min:
+                        x_max = (
+                            x_min + 1.0
+                        )
+
+                    if y_max <= y_min:
+                        y_max = (
+                            y_min + 1.0
+                        )
+
+                    tick_count = 5
+
+                    for index in range(
+                        tick_count + 1
+                    ):
+                        fraction = (
+                            index
+                            / tick_count
+                        )
+
+                        grid_x = int(
+                            round(
+                                plot_left
+                                + fraction
+                                * (
+                                    plot_right
+                                    - plot_left
+                                )
+                            )
+                        )
+
+                        x_value = (
+                            x_min
+                            + fraction
+                            * (
+                                x_max
+                                - x_min
+                            )
+                        )
+
+                        line(
+                            grid_x,
+                            plot_top,
+                            grid_x,
+                            plot_bottom,
+                            "#d0d0d0",
+                        )
+
+                        draw_text(
+                            PanelDesigner._format(
+                                x_value
+                            ),
+                            grid_x - 28,
+                            plot_bottom + 2,
+                            grid_x + 28,
+                            plot_bottom + 19,
+                            size=7,
+                            center=True,
+                        )
+
+                    for index in range(
+                        tick_count + 1
+                    ):
+                        fraction = (
+                            index
+                            / tick_count
+                        )
+
+                        grid_y = int(
+                            round(
+                                plot_bottom
+                                - fraction
+                                * (
+                                    plot_bottom
+                                    - plot_top
+                                )
+                            )
+                        )
+
+                        y_value = (
+                            y_min
+                            + fraction
+                            * (
+                                y_max
+                                - y_min
+                            )
+                        )
+
+                        line(
+                            plot_left,
+                            grid_y,
+                            plot_right,
+                            grid_y,
+                            "#d0d0d0",
+                        )
+
+                        draw_text(
+                            PanelDesigner._format(
+                                y_value
+                            ),
+                            x + 1,
+                            grid_y - 8,
+                            plot_left - 5,
+                            grid_y + 9,
+                            size=7,
+                        )
+
+                    line(
+                        plot_left,
+                        plot_top,
+                        plot_right,
+                        plot_top,
+                        "#777777",
+                    )
+                    line(
+                        plot_right,
+                        plot_top,
+                        plot_right,
+                        plot_bottom,
+                        "#777777",
+                    )
+                    line(
+                        plot_right,
+                        plot_bottom,
+                        plot_left,
+                        plot_bottom,
+                        "#777777",
+                    )
+                    line(
+                        plot_left,
+                        plot_bottom,
+                        plot_left,
+                        plot_top,
+                        "#777777",
+                    )
+
+                    if len(
+                        numbers
+                    ) > 1:
+                        low = min(
+                            numbers
+                        )
+                        high = max(
+                            numbers
+                        )
+                        span = (
+                            high
+                            - low
+                            or 1
+                        )
+
+                        previous = None
+
+                        for index, number in enumerate(
+                            numbers
+                        ):
+                            point_x = int(
+                                round(
+                                    plot_left
+                                    + index
+                                    * (
+                                        plot_right
+                                        - plot_left
+                                    )
+                                    / (
+                                        len(
+                                            numbers
+                                        )
+                                        - 1
+                                    )
+                                )
+                            )
+
+                            point_y = int(
+                                round(
+                                    plot_bottom
+                                    - (
+                                        number
+                                        - low
+                                    )
+                                    / span
+                                    * (
+                                        plot_bottom
+                                        - plot_top
+                                    )
+                                )
+                            )
+
+                            if previous is not None:
+                                line(
+                                    previous[0],
+                                    previous[1],
+                                    point_x,
+                                    point_y,
+                                    "#00866a",
+                                    2,
+                                )
+
+                            previous = (
+                                point_x,
+                                point_y,
+                            )
+
+                    draw_text(
+                        item[
+                            "properties"
+                        ].get(
+                            "x_label",
+                            "Baris Pixel",
+                        ),
+                        plot_left,
+                        y + h - 22,
+                        plot_right,
+                        y + h - 3,
+                        size=7,
+                        center=True,
+                    )
+
+                    # Keep the vertical axis label readable in the exported
+                    # fixed-layout image without introducing a rotated-font
+                    # dependency. It is placed in the same chart margin.
+                    draw_text(
+                        item[
+                            "properties"
+                        ].get(
+                            "y_label",
+                            "Intensitas (Threshold)",
+                        ),
+                        x + 2,
+                        plot_top,
+                        plot_left - 3,
+                        plot_bottom,
+                        size=7,
+                        center=True,
+                    )
+
+                else:
+                    value = item.get(
+                        "_analysis_displayed",
+                        "--",
+                    )
+
+                    draw_text(
+                        value,
+                        x + 8,
+                        y + 22,
+                        x + w - 8,
+                        y + h - 4,
+                        size=13,
+                        bold=True,
+                        center=True,
+                    )
+
+            class BITMAPINFOHEADER(
+                ctypes.Structure
+            ):
+                _fields_ = [
+                    ("biSize", wintypes.DWORD),
+                    ("biWidth", wintypes.LONG),
+                    ("biHeight", wintypes.LONG),
+                    ("biPlanes", wintypes.WORD),
+                    ("biBitCount", wintypes.WORD),
+                    ("biCompression", wintypes.DWORD),
+                    ("biSizeImage", wintypes.DWORD),
+                    ("biXPelsPerMeter", wintypes.LONG),
+                    ("biYPelsPerMeter", wintypes.LONG),
+                    ("biClrUsed", wintypes.DWORD),
+                    ("biClrImportant", wintypes.DWORD),
+                ]
+
+            class BITMAPINFO(
+                ctypes.Structure
+            ):
+                _fields_ = [
+                    (
+                        "bmiHeader",
+                        BITMAPINFOHEADER,
+                    ),
+                    (
+                        "bmiColors",
+                        wintypes.DWORD * 3,
+                    ),
+                ]
+
+            info = BITMAPINFO()
+
+            info.bmiHeader.biSize = (
+                ctypes.sizeof(
+                    BITMAPINFOHEADER
+                )
+            )
+            info.bmiHeader.biWidth = width
+            info.bmiHeader.biHeight = -height
+            info.bmiHeader.biPlanes = 1
+            info.bmiHeader.biBitCount = 32
+            info.bmiHeader.biCompression = 0
+
+            buffer = (
+                ctypes.c_ubyte
+                * (
+                    width
+                    * height
+                    * 4
+                )
+            )()
+
+            gdi32.GetDIBits.argtypes = [
+                wintypes.HDC,
+                wintypes.HBITMAP,
+                ctypes.c_uint,
+                ctypes.c_uint,
+                ctypes.c_void_p,
+                ctypes.POINTER(
+                    BITMAPINFO
+                ),
+                ctypes.c_uint,
+            ]
+            gdi32.GetDIBits.restype = ctypes.c_int
+
+            rows_read = gdi32.GetDIBits(
+                memory_dc,
+                bitmap,
+                0,
+                height,
+                ctypes.byref(
+                    buffer
+                ),
+                ctypes.byref(
+                    info
+                ),
+                0,
+            )
+
+            if rows_read != height:
+                return False
+
+            bgra = bytes(
+                buffer
+            )
+
+            raw_rows = bytearray()
+
+            source_index = 0
+
+            for _row in range(
+                height
+            ):
+                raw_rows.append(
+                    0
+                )
+
+                for _column in range(
+                    width
+                ):
+                    blue = bgra[
+                        source_index
+                    ]
+                    green = bgra[
+                        source_index + 1
+                    ]
+                    red = bgra[
+                        source_index + 2
+                    ]
+
+                    raw_rows.extend(
+                        (
+                            red,
+                            green,
+                            blue,
+                        )
+                    )
+
+                    source_index += 4
+
+            def png_chunk(
+                chunk_type: bytes,
+                payload: bytes,
+            ) -> bytes:
+                body = (
+                    chunk_type
+                    + payload
+                )
+
+                return (
+                    struct.pack(
+                        ">I",
+                        len(
+                            payload
+                        ),
+                    )
+                    + body
+                    + struct.pack(
+                        ">I",
+                        zlib.crc32(
+                            body
+                        )
+                        & 0xFFFFFFFF,
+                    )
+                )
+
+            png_bytes = (
+                b"\x89PNG\r\n\x1a\n"
+                + png_chunk(
+                    b"IHDR",
+                    struct.pack(
+                        ">IIBBBBB",
+                        width,
+                        height,
+                        8,
+                        2,
+                        0,
+                        0,
+                        0,
+                    ),
+                )
+                + png_chunk(
+                    b"IDAT",
+                    zlib.compress(
+                        bytes(
+                            raw_rows
+                        ),
+                        6,
+                    ),
+                )
+                + png_chunk(
+                    b"IEND",
+                    b"",
+                )
+            )
+
+            destination = Path(
+                output_path
+            )
+
+            destination.parent.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+
+            destination.write_bytes(
+                png_bytes
+            )
+
+            return True
+
+        except (
+            AttributeError,
+            OSError,
+            TypeError,
+            ValueError,
+        ):
+            return False
+
+        finally:
+            try:
+                if "old_bitmap" in locals() and old_bitmap:
+                    gdi32.SelectObject(
+                        memory_dc,
+                        old_bitmap,
+                    )
+
+                if "created_objects" in locals():
+                    for gdi_object in created_objects:
+                        if gdi_object:
+                            gdi32.DeleteObject(
+                                gdi_object
+                            )
+
+                if "bitmap" in locals() and bitmap:
+                    gdi32.DeleteObject(
+                        bitmap
+                    )
+
+                if "memory_dc" in locals() and memory_dc:
+                    gdi32.DeleteDC(
+                        memory_dc
+                    )
+
+                if "screen_dc" in locals() and screen_dc:
+                    user32.ReleaseDC(
+                        0,
+                        screen_dc,
+                    )
+
+            except Exception:
+                pass
+
+
+    def capture_analysis_snapshot(
+        self,
+        output_path,
+    ) -> bool:
+        """
+        Backward-compatible synchronous Analysis capture.
+
+        Normal spinning-drop operation uses freeze_analysis_snapshot() plus the
+        app background worker; this wrapper remains for any direct callers.
+        """
+
+        snapshot_data = (
+            self.freeze_analysis_snapshot()
+        )
+
+        if snapshot_data is None:
+            return False
+
+        return self.render_analysis_snapshot(
+            snapshot_data,
+            output_path,
+        )
 
     def _image_item_for_node(
         self,
@@ -1322,6 +2757,7 @@ class PanelDesigner(tk.Canvas):
             self.delete("persistent_fast_display")
             self._persistent_fast_display_tags.clear()
             self._persistent_fast_display_text_items.clear()
+            self._persistent_fast_display_bar_items.clear()
             self._persistent_fast_display_values.clear()
             self._persistent_fast_display_scaled = False
 

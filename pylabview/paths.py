@@ -60,6 +60,13 @@ def user_data_root() -> Path:
 
 
 def captures_dir() -> Path:
+    """
+    Legacy captures directory.
+
+    Existing behaviour is preserved. New session-based capture paths
+    are provided separately below and are not activated here.
+    """
+
     return (
         user_data_root()
         / "Captures"
@@ -67,6 +74,13 @@ def captures_dir() -> Path:
 
 
 def measurement_exports_dir() -> Path:
+    """
+    Legacy measurement-export directory.
+
+    Existing behaviour is preserved. New session-based measurement paths
+    are provided separately below and are not activated here.
+    """
+
     return (
         user_data_root()
         / "Measurement Exports"
@@ -84,6 +98,115 @@ def projects_dir() -> Path:
     return (
         user_data_root()
         / "Projects"
+    )
+
+
+# ================================================================
+# SESSION PATH INFRASTRUCTURE
+#
+# IMPORTANT:
+# These helpers only describe the new folder structure.
+# They do NOT create a session automatically and do NOT redirect any
+# existing capture/export workflow yet.
+# ================================================================
+
+def sessions_dir() -> Path:
+    return (
+        user_data_root()
+        / "Sessions"
+    )
+
+
+def session_dir(
+    session_name: str,
+) -> Path:
+    return (
+        sessions_dir()
+        / session_name
+    )
+
+
+def session_captures_dir(
+    session_root: Path,
+) -> Path:
+    return (
+        session_root
+        / "Captures"
+    )
+
+
+def session_reference_dir(
+    session_root: Path,
+) -> Path:
+    return (
+        session_captures_dir(
+            session_root
+        )
+        / "Reference"
+    )
+
+
+def session_stages_dir(
+    session_root: Path,
+) -> Path:
+    return (
+        session_captures_dir(
+            session_root
+        )
+        / "Stages"
+    )
+
+
+def session_stage_dir(
+    session_root: Path,
+    rpm: int,
+) -> Path:
+    return (
+        session_stages_dir(
+            session_root
+        )
+        / f"{int(rpm)}_RPM"
+    )
+
+
+def session_analysis_dir(
+    session_root: Path,
+) -> Path:
+    return (
+        session_captures_dir(
+            session_root
+        )
+        / "Analysis"
+    )
+
+
+def session_analysis_rpm_dir(
+    session_root: Path,
+    rpm: int,
+) -> Path:
+    return (
+        session_analysis_dir(
+            session_root
+        )
+        / f"{int(rpm)}_RPM"
+    )
+
+
+def session_measurements_dir(
+    session_root: Path,
+) -> Path:
+    return (
+        session_root
+        / "Measurements"
+    )
+
+
+def session_info_path(
+    session_root: Path,
+) -> Path:
+    return (
+        session_root
+        / "Session_Info.json"
     )
 
 
@@ -112,15 +235,18 @@ def ensure_user_directories() -> tuple[Path, ...]:
     """
     Create the writable user-data directory structure if needed.
 
-    Existing folders are preserved and are never removed or overwritten.
+    Existing folders are preserved and are never removed.
+
+    Legacy top-level Captures and Measurement Exports folders are no longer
+    created. Capture and measurement output belongs to the active Session.
+    Individual session folders are intentionally NOT created in paths.py.
     """
 
     directories = (
         user_data_root(),
-        captures_dir(),
-        measurement_exports_dir(),
         user_examples_dir(),
         projects_dir(),
+        sessions_dir(),
     )
 
     for directory in directories:
@@ -134,10 +260,12 @@ def ensure_user_directories() -> tuple[Path, ...]:
 
 def copy_default_examples() -> tuple[Path, ...]:
     """
-    Copy bundled default example projects into the user's Examples folder.
+    Sync bundled default example projects into the user's Examples folder.
 
-    Existing user files are preserved and are never overwritten.
-    Missing bundled example files are skipped.
+    The two application-managed default examples are refreshed from the
+    bundled release when their contents differ, so users do not keep stale
+    Standard/Manual examples after an application update. Missing bundled
+    example files are skipped.
     """
 
     source_dir = bundled_examples_dir()
@@ -166,9 +294,13 @@ def copy_default_examples() -> tuple[Path, ...]:
             / filename
         )
 
+        if not source.is_file():
+            continue
+
         if (
-            not source.is_file()
-            or destination.exists()
+            destination.exists()
+            and source.read_bytes()
+            == destination.read_bytes()
         ):
             continue
 

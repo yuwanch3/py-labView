@@ -107,7 +107,8 @@
             "label": "Picture Oil Capture",
             "properties": {
               "measurement_duration_seconds": 1.0,
-              "time_field_note": "Assumed measurement duration; confirm against original VI"
+              "time_field_note": "Assumed measurement duration; confirm against original VI",
+              "reference_calibration_camera": false
             }
           },
           {
@@ -118,7 +119,8 @@
             "label": "Picture Comparison Wire Capture",
             "properties": {
               "measurement_duration_seconds": 1.0,
-              "time_field_note": "Assumed measurement duration; confirm against original VI"
+              "time_field_note": "Assumed measurement duration; confirm against original VI",
+              "reference_calibration_camera": true
             }
           },
           {
@@ -166,18 +168,6 @@
             "y": 300,
             "label": "Vonnegut IFT Radius Form",
             "properties": {}
-          },
-          {
-            "id": "csv_report",
-            "type": "report_generate",
-            "x": 1700,
-            "y": 300,
-            "label": "Spinning Drop CSV Log",
-            "properties": {
-              "path": "spinning-drop-ift.csv",
-              "format": "csv",
-              "title": "Spinning Drop IFT Measurements"
-            }
           },
           {
             "id": "rpm_display",
@@ -793,13 +783,6 @@
             "source_port": "table_data",
             "target_node": "table_display",
             "target_port": "value",
-            "data_type": "array"
-          },
-          {
-            "source_node": "watcher",
-            "source_port": "table_data",
-            "target_node": "csv_report",
-            "target_port": "data",
             "data_type": "array"
           },
           {

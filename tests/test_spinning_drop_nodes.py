@@ -283,46 +283,106 @@ class SpinningDropNodeTests(unittest.TestCase):
         node = Node("watcher", "spinning_drop_stage_watcher", 0, 0, "watcher", {})
         return DataflowRuntime()._evaluate(node, watcher_inputs(**overrides), {}, [], session=session)
 
+    def complete_stage_samples(self, session, rpm):
+        """Feed the exact 10 saved-sample events required by the v8 watcher."""
+        result = None
+        event_key = "spinning-drop-stage-sample-event:graph:standalone"
+
+        for sample_index in range(1, 11):
+            session.state[event_key] = {
+                "rpm": float(rpm),
+                "sample_index": sample_index,
+                "path": f"stage_{int(rpm)}rpm_sample_{sample_index:02d}.jpg",
+            }
+            result = self.watch_pass(
+                session,
+                rpm=float(rpm),
+                current_target_rpm=float(rpm),
+            )
+
+        return result
+
     def test_watcher_full_cycle_yields_exactly_six_rows(self):
         session = RunSession(resources=ResourceManager())
-        # Real firmware: START is answered with ACK:START and an implicit
-        # hardcoded ramp to 1000 RPM — no TARGET_RPM:1000 event ever exists.
+
         first = self.watch_pass(session)
         self.assertEqual(first["state"], "RUNNING")
         self.assertEqual(len(first["table_data"]), 1, "START announces nothing; header only")
-        # First serial stage event of a real cycle is the increment to 2000.
-        for index, target in enumerate((2000, 3000, 4000, 5000, 6000), start=1):
-            result = self.watch_pass(session, stage_changed=True, current_target_rpm=float(target),
-                                     rpm=float(target), elapsed_time_s=180.0 * index)
-            self.assertEqual(len(result["table_data"]) - 1, index,
-                             f"row for completed stage {target - 1000} missing")
-            self.assertEqual(result["table_data"][-1][0], float(target - 1000),
-                             "row must record the PREVIOUS stage's RPM")
-        final = self.watch_pass(session, autostop=True)
+
+        first_stage = self.complete_stage_samples(session, 1000)
+        self.assertEqual(len(first_stage["table_data"]) - 1, 1)
+        self.assertEqual(first_stage["table_data"][-1][0], 1000.0)
+
+        for expected_rows, target in enumerate((2000, 3000, 4000, 5000, 6000), start=2):
+            self.watch_pass(
+                session,
+                stage_changed=True,
+                current_target_rpm=float(target),
+                rpm=float(target),
+            )
+            result = self.complete_stage_samples(session, target)
+            self.assertEqual(
+                len(result["table_data"]) - 1,
+                expected_rows,
+                f"10-sample row for completed stage {target} missing",
+            )
+            self.assertEqual(result["table_data"][-1][0], float(target))
+
+        final = self.watch_pass(
+            session,
+            autostop=True,
+            current_target_rpm=6000.0,
+            rpm=6000.0,
+        )
         self.assertEqual(final["state"], "MAX_RPM_REACHED")
         self.assertTrue(final["error"].status)
         self.assertEqual(final["error"].code, 68)
-        self.assertEqual(len(final["table_data"]) - 1, 6, "autostop completes the 6th row")
-        self.assertEqual([row[0] for row in final["table_data"][1:]],
-                         [1000.0, 2000.0, 3000.0, 4000.0, 5000.0, 6000.0])
-        self.assertEqual(final["table_data"][0],
-                         ["RPM", "Dia (px)", "Dia (mm)", "kg/m3", "w²", "r³", "IFT N/m", "IFT mN/m"])
+        self.assertEqual(len(final["table_data"]) - 1, 6)
+        self.assertEqual(
+            [row[0] for row in final["table_data"][1:]],
+            [1000.0, 2000.0, 3000.0, 4000.0, 5000.0, 6000.0],
+        )
+        self.assertEqual(
+            final["table_data"][0],
+            ["RPM", "Dia (px)", "Dia (mm)", "kg/m3", "w²", "r³", "IFT N/m", "IFT mN/m"],
+        )
 
     def test_watcher_does_not_lose_first_stage_row_matching_real_firmware(self):
-        """Regression: firmware never sends TARGET_RPM:1000. The exact real
-        event order is run=True -> TARGET_RPM:2000 .. TARGET_RPM:6000 ->
-        ACK:AUTOSTOP_6000, and the final table must still hold all six rows
-        starting with the implicit 1000 RPM stage."""
+        """Regression: firmware never sends TARGET_RPM:1000.
+
+        The initial 1000 RPM row is now produced by the automatic 10-sample
+        capture batch, not by a synthetic TARGET_RPM:1000 firmware event.
+        """
         session = RunSession(resources=ResourceManager())
-        self.watch_pass(session)  # run=True alone: firmware announces nothing
+        self.watch_pass(session)
+
+        self.complete_stage_samples(session, 1000)
+
         for target in (2000, 3000, 4000, 5000, 6000):
-            self.watch_pass(session, stage_changed=True, current_target_rpm=float(target))
-        final = self.watch_pass(session, autostop=True)
+            self.watch_pass(
+                session,
+                stage_changed=True,
+                current_target_rpm=float(target),
+                rpm=float(target),
+            )
+            self.complete_stage_samples(session, target)
+
+        final = self.watch_pass(
+            session,
+            autostop=True,
+            current_target_rpm=6000.0,
+            rpm=6000.0,
+        )
         rows = final["table_data"][1:]
-        self.assertEqual(len(rows), 6,
-                         "silent loss of the implicit 1000 RPM row is forbidden")
-        self.assertEqual([row[0] for row in rows],
-                         [1000.0, 2000.0, 3000.0, 4000.0, 5000.0, 6000.0])
+        self.assertEqual(
+            len(rows),
+            6,
+            "silent loss of the implicit 1000 RPM measurement batch is forbidden",
+        )
+        self.assertEqual(
+            [row[0] for row in rows],
+            [1000.0, 2000.0, 3000.0, 4000.0, 5000.0, 6000.0],
+        )
 
     def test_watcher_never_appends_without_firmware_events(self):
         session = RunSession(resources=ResourceManager())
@@ -335,17 +395,37 @@ class SpinningDropNodeTests(unittest.TestCase):
     def test_watcher_holds_table_on_stop_and_resets_on_new_run(self):
         session = RunSession(resources=ResourceManager())
         self.watch_pass(session)
-        stopped = self.watch_pass(session, autostop=True)
-        self.assertEqual(len(stopped["table_data"]) - 1, 1, "implicit 1000 stage completed by autostop")
+
+        completed = self.complete_stage_samples(session, 1000)
+        self.assertEqual(
+            len(completed["table_data"]) - 1,
+            1,
+            "1000 RPM must be published only after its 10-sample batch",
+        )
+
+        stopped = self.watch_pass(
+            session,
+            autostop=True,
+            current_target_rpm=1000.0,
+            rpm=1000.0,
+        )
+        self.assertEqual(len(stopped["table_data"]) - 1, 1)
+
         held = self.watch_pass(session, run=False)
         self.assertEqual(held["state"], "IDLE")
-        self.assertEqual(held["table_data"], stopped["table_data"],
-                         "STOP must preserve the completed measurement table")
+        self.assertEqual(
+            held["table_data"],
+            stopped["table_data"],
+            "STOP must preserve the completed measurement table",
+        )
+
         restarted = self.watch_pass(session, run=True)
         self.assertEqual(restarted["state"], "RUNNING")
-        self.assertEqual(restarted["table_data"],
-                         [["RPM", "Dia (px)", "Dia (mm)", "kg/m3", "w²", "r³", "IFT N/m", "IFT mN/m"]],
-                         "a new run starts with a fresh measurement table")
+        self.assertEqual(
+            restarted["table_data"],
+            [["RPM", "Dia (px)", "Dia (mm)", "kg/m3", "w²", "r³", "IFT N/m", "IFT mN/m"]],
+            "a new run starts with a fresh measurement table",
+        )
 
     def test_watcher_error_states_halt_until_manual_stop(self):
         session = RunSession(resources=ResourceManager())
@@ -487,8 +567,14 @@ class SpinningDropNodeTests(unittest.TestCase):
         graph = project.main.graph
         required = {"arduino_telemetry_reader", "camera_capture_dual_mode", "edge_intensity_profile",
                     "wire_calibration", "pixel_to_mm", "vonnegut_ift",
-                    "spinning_drop_stage_watcher", "rpm_stall_watchdog", "report_generate"}
-        self.assertTrue(required <= {node.type for node in graph.nodes.values()})
+                    "spinning_drop_stage_watcher", "rpm_stall_watchdog"}
+        node_types = {node.type for node in graph.nodes.values()}
+        self.assertTrue(required <= node_types)
+        self.assertNotIn(
+            "report_generate",
+            node_types,
+            "v8 bundled spinning-drop project must not restore the removed legacy CSV report node",
+        )
         self.assertEqual(DataflowRuntime().validate(graph, project, project.main_vi), [])
         self.assertEqual(graph.nodes["oil_mode"].properties["value"], "network",
                          "DroidCam/network capture must be the example default")
@@ -534,10 +620,10 @@ class SpinningDropNodeTests(unittest.TestCase):
             self.assertFalse(any("Cycle detected" in error for error in result.errors))
             self.assertFalse(any("missing input" in error for error in result.errors))
             csv_path = Path(directory, "spinning-drop-ift.csv")
-            self.assertTrue(csv_path.exists())
-            # No firmware stage-completion event arrived, so the report must
-            # contain the header only — never fabricated measurement rows.
-            self.assertEqual(len(csv_path.read_text().strip().splitlines()), 1)
+            self.assertFalse(
+                csv_path.exists(),
+                "v8 spinning-drop workflow must not recreate the removed legacy CSV output",
+            )
 
 
 if __name__ == "__main__":

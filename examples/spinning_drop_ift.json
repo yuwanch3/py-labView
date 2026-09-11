@@ -107,7 +107,8 @@
             "label": "Picture Oil Capture",
             "properties": {
               "measurement_duration_seconds": 1.0,
-              "time_field_note": "Assumed measurement duration; confirm against original VI"
+              "time_field_note": "Assumed measurement duration; confirm against original VI",
+              "reference_calibration_camera": false
             }
           },
           {
@@ -118,7 +119,8 @@
             "label": "Picture Comparison Wire Capture",
             "properties": {
               "measurement_duration_seconds": 1.0,
-              "time_field_note": "Assumed measurement duration; confirm against original VI"
+              "time_field_note": "Assumed measurement duration; confirm against original VI",
+              "reference_calibration_camera": true
             }
           },
           {
@@ -166,18 +168,6 @@
             "y": 300,
             "label": "Vonnegut IFT Radius Form",
             "properties": {}
-          },
-          {
-            "id": "csv_report",
-            "type": "report_generate",
-            "x": 1700,
-            "y": 300,
-            "label": "Spinning Drop CSV Log",
-            "properties": {
-              "path": "spinning-drop-ift.csv",
-              "format": "csv",
-              "title": "Spinning Drop IFT Measurements"
-            }
           },
           {
             "id": "rpm_display",
@@ -789,13 +779,6 @@
             "source_port": "table_data",
             "target_node": "table_display",
             "target_port": "value",
-            "data_type": "array"
-          },
-          {
-            "source_node": "watcher",
-            "source_port": "table_data",
-            "target_node": "csv_report",
-            "target_port": "data",
             "data_type": "array"
           },
           {
@@ -1645,7 +1628,7 @@
         "extensions": {
           "hardware_basis": "TZ20002MG, 60W 12V 5A DC motor, BTS7960 HW-039, Arduino Uno clone, optical/IR pulse sensor disc (4 holes/rev)",
           "serial_protocol_status": "Ground truth from lab Arduino firmware source (found on lab PC, 2026-08-21): PC sends START/STOP text commands; firmware replies ACK:START, ACK:STOP, ACK:AUTOSTOP_6000; streams RPM:<int>;PWM:<int>;TIME:<float>;TARGET:<int> every ~100ms and TARGET_RPM:<int> once per stage change. RPM is computed by the firmware (4 holes/revolution); the PC never computes RPM from raw pulses.",
-          "architecture_status": "The 6-stage RPM sequence (1000..6000, 3 min per stage, autostop after 3 min at 6000 RPM) runs entirely in the Arduino firmware. PyLabView Studio is a passive event listener: spinning_drop_stage_watcher appends one table row per firmware stage-completion event (5x TARGET_RPM + 1x ACK:AUTOSTOP_6000) and never times anything itself.",
+          "architecture_status": "The 6-stage RPM sequence (1000..6000, 3 min per stage, autostop after 3 min at 6000 RPM) runs entirely in the Arduino firmware. PyLabView Studio remains a passive event listener for stage targets and telemetry. For each Standard Mode target (1000, 2000, 3000, 4000, 5000, 6000 RPM), the application waits until actual RPM is within the configured stability band, automatically captures 10 images at 0.4 s intervals, calculates the stage-average diameter and statistics, and publishes one Measurement Log Table row immediately after the 10-sample batch is complete. At 6000 RPM the firmware still owns the final autostop.",
           "time_fields_status": "TIME(s) displays show the firmware telemetry field TIME (seconds since the last TARGET_RPM change); the second display is a reserved duplicate.",
           "stop_button_binding": "The red STOP button mirrors the original front panel visually; binding it to the application-level RunController abort is not implemented yet.",
           "physical_validation": "not performed",

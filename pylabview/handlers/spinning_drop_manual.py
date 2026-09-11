@@ -41,11 +41,158 @@ def _stage_capture_key(
     )
 
 
+def _stage_sample_event_key(
+    context: HandlerContext,
+) -> str:
+    return (
+        f"spinning-drop-stage-sample-event:"
+        f"{context.caller_vi or 'graph'}:"
+        f"{context.graph_scope}"
+    )
+
+
+def _stage_measurements_key(
+    context: HandlerContext,
+) -> str:
+    return (
+        f"spinning-drop-stage-measurements:"
+        f"{context.caller_vi or 'graph'}:"
+        f"{context.graph_scope}"
+    )
+
+
+def _stage_summary_from_samples(
+    rpm: float,
+    samples: list[dict[str, object]],
+) -> tuple[list[float], dict[str, float]] | None:
+
+    if len(samples) != 10:
+        return None
+
+    try:
+        diameters_px = [float(sample["diameter_px"]) for sample in samples]
+        diameters_mm = [float(sample["diameter_mm"]) for sample in samples]
+        delta_rhos = [float(sample["delta_rho"]) for sample in samples]
+    except (KeyError, TypeError, ValueError):
+        return None
+
+    if not math.isfinite(float(rpm)) or float(rpm) <= 0.0:
+        return None
+
+    valid_measurements = [
+        (diameter_px, diameter_mm, delta_rho)
+        for diameter_px, diameter_mm, delta_rho
+        in zip(
+            diameters_px,
+            diameters_mm,
+            delta_rhos,
+        )
+        if (
+            math.isfinite(diameter_px)
+            and diameter_px > 0.0
+            and math.isfinite(diameter_mm)
+            and diameter_mm > 0.0
+            and math.isfinite(delta_rho)
+            and delta_rho > 0.0
+        )
+    ]
+
+    if not valid_measurements:
+        return None
+
+    valid_px = [
+        item[0]
+        for item in valid_measurements
+    ]
+
+    valid_mm = [
+        item[1]
+        for item in valid_measurements
+    ]
+
+    valid_delta_rho = [
+        item[2]
+        for item in valid_measurements
+    ]
+
+    n = len(valid_px)
+    mean_px = sum(valid_px) / n
+    mean_mm = sum(valid_mm) / n
+    minimum_px = min(valid_px)
+    maximum_px = max(valid_px)
+
+    variance_px = (
+        sum(
+            (value - mean_px) ** 2
+            for value in valid_px
+        )
+        / (n - 1)
+        if n > 1
+        else 0.0
+    )
+
+    std_dev_px = math.sqrt(
+        variance_px
+    )
+
+    cv_percent = (
+        std_dev_px
+        / mean_px
+        * 100.0
+        if mean_px > 0.0
+        else 0.0
+    )
+
+    delta_rho = (
+        sum(valid_delta_rho)
+        / len(valid_delta_rho)
+    )
+    omega = 2.0 * math.pi * float(rpm) / 60.0
+    omega_squared = omega ** 2
+    radius_m = mean_mm / 1000.0 / 2.0
+    radius_cubed = radius_m ** 3
+    ift_n_m = delta_rho * omega_squared * radius_cubed / 4.0
+    ift_mn_m = ift_n_m * 1000.0
+
+    row = [
+        float(rpm),
+        mean_px,
+        mean_mm,
+        delta_rho,
+        omega_squared,
+        radius_cubed,
+        ift_n_m,
+        ift_mn_m,
+    ]
+
+    statistics = {
+        "n": float(n),
+        "captured_n": float(len(samples)),
+        "mean_diameter_px": mean_px,
+        "min_diameter_px": minimum_px,
+        "max_diameter_px": maximum_px,
+        "std_dev_diameter_px": std_dev_px,
+        "cv_percent": cv_percent,
+    }
+
+    return row, statistics
+
+
 def _telemetry_snapshot_key(
     context: HandlerContext,
 ) -> str:
     return (
         f"spinning-drop-telemetry-snapshot:"
+        f"{context.caller_vi or 'graph'}:"
+        f"{context.graph_scope}"
+    )
+
+
+def _manual_run_generation_key(
+    context: HandlerContext,
+) -> str:
+    return (
+        f"spinning-drop-manual-run-generation:"
         f"{context.caller_vi or 'graph'}:"
         f"{context.graph_scope}"
     )
@@ -340,6 +487,30 @@ def arduino_manual_rpm_reader(
             if text == "ACK:START":
                 state["start_pending"] = False
                 state["running"] = True
+
+                # A confirmed Arduino START defines a genuinely new Manual
+                # measurement run. Clear any TARGET_REACHED latch left from
+                # the previous run and advance the shared run generation.
+                state["target_reached_latched"] = None
+
+                generation_key = (
+                    _manual_run_generation_key(
+                        context
+                    )
+                )
+
+                context.session.state[
+                    generation_key
+                ] = (
+                    int(
+                        context.session.state.get(
+                            generation_key,
+                            0,
+                        )
+                    )
+                    + 1
+                )
+
                 continue
 
             if text == "ACK:SOFT_STOP":
@@ -366,6 +537,7 @@ def arduino_manual_rpm_reader(
             if text == "ACK:STOP":
                 state["running"] = False
                 state["start_pending"] = False
+                state["target_reached_latched"] = None
                 continue
 
         context.session.token.check()
@@ -587,8 +759,8 @@ def spinning_drop_manual_watcher(
     """
     Manual-mode Measurement Log builder.
 
-    One row is appended once the Arduino emits TARGET_REACHED:<rpm>.
-    Starting a new Manual run resets the table, matching Standard mode.
+    TARGET_REACHED starts the shared 10-image stage burst. The official
+    row is appended only after all 10 saved samples are measured and averaged.
     """
 
     headers = [
@@ -601,16 +773,6 @@ def spinning_drop_manual_watcher(
         "IFT N/m",
         "IFT mN/m",
     ]
-
-    measured = (
-        "diameter_px",
-        "diameter_mm",
-        "delta_rho",
-        "omega_squared",
-        "radius_cubed",
-        "ift_N_m",
-        "ift_mN_m",
-    )
 
     state_key = (
         f"manual-stage-watcher:"
@@ -625,106 +787,120 @@ def spinning_drop_manual_watcher(
             "running": False,
             "rows": [],
             "last_logged_target": None,
+            "run_generation": 0,
+            "sample_rpm": None,
+            "samples": [],
         },
     )
 
-    def result(
-        state_label: str,
-        error: ErrorCluster | None = None,
-    ):
+    def result(state_label, error=None):
         return {
-            "table_data": [
-                headers,
-                *state["rows"],
-            ],
+            "table_data": [headers, *state["rows"]],
             "state": state_label,
-            "error": (
-                error
-                if error is not None
-                else ErrorCluster()
-            ),
+            "error": error if error is not None else ErrorCluster(),
         }
 
-    run = bool(
-        context.inputs["run"]
-    )
+    run = bool(context.inputs["run"])
+    run_generation = int(context.session.state.get(_manual_run_generation_key(context), 0))
+
+    if run_generation != state["run_generation"]:
+        state["run_generation"] = run_generation
+        state["running"] = True
+        state["rows"] = []
+        state["last_logged_target"] = None
+        state["sample_rpm"] = None
+        state["samples"] = []
+        context.session.state[_stage_measurements_key(context)] = []
+        context.runtime.gmj_stage_measurements = []
 
     if not run:
         state["running"] = False
-        return result(
-            "IDLE"
-        )
+        state["sample_rpm"] = None
+        state["samples"] = []
+        return result("IDLE")
 
     if context.inputs["error"].status:
         return result(
             "ERROR",
-            ErrorCluster(
-                True,
-                71,
-                "manual serial fault: watcher halted "
-                f"({context.inputs['error'].source})",
-            ),
+            ErrorCluster(True, 71, "manual serial fault: watcher halted " f"({context.inputs['error'].source})"),
         )
 
-    if bool(
-        context.inputs["stalled"]
-    ):
-        return result(
-            "ERROR",
-            ErrorCluster(
-                True,
-                72,
-                "RPM stall detected: manual watcher halted",
-            ),
-        )
+    if bool(context.inputs["stalled"]):
+        return result("ERROR", ErrorCluster(True, 72, "RPM stall detected: manual watcher halted"))
 
     if not state["running"]:
         state["running"] = True
         state["rows"] = []
         state["last_logged_target"] = None
+        state["sample_rpm"] = None
+        state["samples"] = []
+        context.session.state[_stage_measurements_key(context)] = []
+        context.runtime.gmj_stage_measurements = []
 
-    if bool(
-        context.inputs["target_reached"]
-    ):
-        completed_rpm = float(
-            context.inputs[
-                "current_target_rpm"
-            ]
-        )
+    sample_event = context.session.state.pop(_stage_sample_event_key(context), None)
 
-        if (
-            completed_rpm > 0.0
-            and completed_rpm
-            != state[
-                "last_logged_target"
-            ]
-        ):
-            row = [
-                completed_rpm
-            ] + [
-                float(
-                    context.inputs[
-                        port
-                    ]
+    if sample_event is not None:
+        try:
+            sample_rpm = float(sample_event["rpm"])
+            sample_index = int(sample_event["sample_index"])
+            sample_path = str(sample_event["path"])
+            diameter_px = float(
+                context.inputs["diameter_px"]
+            )
+
+            diameter_mm = float(
+                context.inputs["diameter_mm"]
+            )
+
+            scale_factor_mm_per_px = (
+                diameter_mm
+                / diameter_px
+                if (
+                    math.isfinite(diameter_px)
+                    and diameter_px > 0.0
+                    and math.isfinite(diameter_mm)
+                    and diameter_mm > 0.0
                 )
-                for port
-                in measured
-            ]
+                else 0.0
+            )
 
-            if all(
-                math.isfinite(
-                    value
-                )
-                for value
-                in row
-            ):
-                state["rows"].append(
-                    row
-                )
-                state[
-                    "last_logged_target"
-                ] = completed_rpm
+            sample = {
+                "rpm": sample_rpm,
+                "sample": sample_index,
+                "diameter_px": diameter_px,
+                "diameter_mm": diameter_mm,
+                "scale_factor_mm_per_px": scale_factor_mm_per_px,
+                "delta_rho": float(context.inputs["delta_rho"]),
+                "capture_file": sample_path,
+            }
+        except (KeyError, TypeError, ValueError):
+            sample = None
+            sample_rpm = 0.0
 
-    return result(
-        "RUNNING"
-    )
+        if sample is not None:
+            if state["sample_rpm"] != sample_rpm:
+                state["sample_rpm"] = sample_rpm
+                state["samples"] = []
+
+            state["samples"].append(sample)
+
+            if len(state["samples"]) == 10:
+                summary = _stage_summary_from_samples(sample_rpm, state["samples"])
+                if summary is not None and sample_rpm != state["last_logged_target"]:
+                    row, statistics = summary
+                    state["rows"].append(row)
+                    stage_record = {
+                        "rpm": sample_rpm,
+                        "samples": [dict(item) for item in state["samples"]],
+                        "statistics": statistics,
+                        "summary_row": list(row),
+                    }
+                    history = context.session.state.setdefault(_stage_measurements_key(context), [])
+                    history.append(stage_record)
+                    context.runtime.gmj_stage_measurements = [dict(record) for record in history]
+                    state["last_logged_target"] = sample_rpm
+
+                state["sample_rpm"] = None
+                state["samples"] = []
+
+    return result("RUNNING")
