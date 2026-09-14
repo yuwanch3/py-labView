@@ -167,6 +167,7 @@ class StudioApp(tk.Tk):
         # Jika runtime menghasilkan beberapa result sebelum Tkinter
         # sempat menggambar, result lama otomatis dibuang.
         self._latest_runtime_result: Any = None
+        self._runtime_poll_after_id: str | None = None
 
         # Waktu terakhir Front Panel digambar.
         self._last_runtime_ui_update = 0.0
@@ -182,6 +183,7 @@ class StudioApp(tk.Tk):
 
         self.operating_mode: str | None = None
         self._startup_screen: StartupScreen | None = None
+        self._mode_switch_in_progress = False
 
         # One application launch / selected operating mode = one session.
         # paths.py owns path construction; app.py owns this lifecycle.
@@ -486,9 +488,154 @@ class StudioApp(tk.Tk):
             self._ask_collapse_workspace_panels,
         )
 
-        self.after(
+        self._mode_switch_in_progress = False
+
+        self._runtime_poll_after_id = self.after(
             30,
             self._poll_runtime,
+        )
+
+    def change_mode(self) -> None:
+        """Safely stop the active workspace and return to mode selection."""
+
+        if self._mode_switch_in_progress:
+            return
+
+        if self.operating_mode not in (
+            "standard",
+            "manual",
+        ):
+            return
+
+        if not messagebox.askyesno(
+            "Ganti Mode",
+            (
+                "Ganti operating mode?\n\n"
+                "Motor, camera, serial connection, dan runtime aktif "
+                "akan dihentikan terlebih dahulu. Workspace mode saat ini "
+                "akan di-reset sebelum mode baru dibuka."
+            ),
+            parent=self,
+        ):
+            return
+
+        self._mode_switch_in_progress = True
+
+        if self._runtime_poll_after_id is not None:
+            try:
+                self.after_cancel(
+                    self._runtime_poll_after_id
+                )
+            except tk.TclError:
+                pass
+            self._runtime_poll_after_id = None
+
+        # Reuse the existing hard/global STOP path exactly as-is:
+        # Motor=False is pushed first, Arduino receives the normal safe STOP
+        # transition, then RunController cancellation closes camera/serial.
+        self.stop()
+
+        self.status_var.set(
+            "Stopping active workspace before mode change..."
+        )
+
+        def finish_mode_switch() -> None:
+            controller_done = self.controller.join(
+                0
+            )
+
+            analysis_done = (
+                self._analysis_snapshot_jobs.unfinished_tasks
+                == 0
+            )
+
+            if (
+                controller_done
+                and analysis_done
+            ):
+                self._reset_workspace_for_mode_selection()
+                return
+
+            self.after(
+                50,
+                finish_mode_switch,
+            )
+
+        finish_mode_switch()
+
+    def _reset_workspace_for_mode_selection(
+        self,
+    ) -> None:
+        """Discard in-memory workspace state and show a fresh mode selector."""
+
+        self.withdraw()
+
+        # Remove the active workspace/menu only after runtime resources are
+        # confirmed closed. Previous session files on disk are preserved.
+        self.configure(
+            menu=""
+        )
+
+        for child in self.winfo_children():
+            child.destroy()
+
+        self.front_panel = None
+        self.property_vars.clear()
+        self.breakpoints.clear()
+        self.probes.clear()
+        self.current_diagram_id = None
+        self.clipboard_node = None
+
+        self.path = None
+        self.dirty = False
+        self.undo_stack.clear()
+        self.redo_stack.clear()
+
+        self.project = Project()
+        self.current_vi_id = self.project.main_vi
+        self.graph = self.project.main.graph
+
+        # A new runtime/controller guarantees that no session state, camera,
+        # serial handle, queued control, or telemetry from the previous mode
+        # can leak into the next workspace.
+        self.runtime = DataflowRuntime()
+        self.controller = RunController(
+            self.runtime
+        )
+
+        self.continuous = False
+        self._latest_runtime_result = None
+        self._last_runtime_ui_update = 0.0
+
+        self._measurement_run_active = False
+        self._measurement_exported = False
+        self._last_motor_control = False
+        self._measurement_run_counter = 0
+
+        self._capture_reference_reset_pending = False
+        self._global_stop_reset_pending = False
+        self._global_stop_indicator_started_at = 0.0
+
+        self._gradual_stop_in_progress = False
+
+        self._pre_run_camera_ready = False
+        self._pre_run_calibration_ready = False
+        self._hardware_camera_connected = False
+        self._hardware_arduino_connected = False
+
+        self._stage_display_override_active = False
+
+        self.session_root = None
+        self.session_id = None
+        self.session_started_at = None
+
+        self.operating_mode = None
+
+        self._startup_screen = StartupScreen(
+            self,
+            self._startup_logo_path(),
+            self._complete_startup,
+            show_splash=False,
         )
 
     # ============================================================
@@ -787,6 +934,25 @@ class StudioApp(tk.Tk):
         menu.add_cascade(
             label="View",
             menu=view_menu,
+        )
+
+        # --------------------------------------------------------
+        # MODE
+        # --------------------------------------------------------
+
+        mode_menu = tk.Menu(
+            menu,
+            tearoff=False,
+        )
+
+        mode_menu.add_command(
+            label="Ganti Mode",
+            command=self.change_mode,
+        )
+
+        menu.add_cascade(
+            label="Mode",
+            menu=mode_menu,
         )
 
         # --------------------------------------------------------
@@ -4553,6 +4719,14 @@ class StudioApp(tk.Tk):
         self,
     ) -> None:
 
+        self._runtime_poll_after_id = None
+
+        # During a mode change the old workspace is being torn down.
+        # Do not touch or reschedule UI widgets from that workspace.
+        # _complete_startup() starts a fresh poll loop for the new mode.
+        if self._mode_switch_in_progress:
+            return
+
         events = (
             self.controller.drain_events()
         )
@@ -4694,7 +4868,7 @@ class StudioApp(tk.Tk):
         # quantized by a coarse 30 ms scheduler step. The previous 30 ms
         # polling could turn a nominal 77 ms UI interval into roughly
         # 90-110+ ms in practice once redraw time was included.
-        self.after(
+        self._runtime_poll_after_id = self.after(
             10,
             self._poll_runtime,
         )
@@ -7039,7 +7213,6 @@ def main() -> None:
     app = StudioApp()
 
     app.mainloop()
-
 
 if __name__ == "__main__":
     main()

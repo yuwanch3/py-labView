@@ -14,6 +14,7 @@ class StartupScreen:
         root: tk.Tk,
         logo_path: Path,
         on_mode_selected: Callable[[str], None],
+        show_splash: bool = True,
     ) -> None:
         self.root = root
         self.logo_path = logo_path
@@ -30,7 +31,11 @@ class StartupScreen:
         self._progress_value = 0
 
         self._center_window()
-        self._show_splash()
+
+        if show_splash:
+            self._show_splash()
+        else:
+            self._show_mode_selection()
 
     def _center_window(self) -> None:
         self.window.update_idletasks()
