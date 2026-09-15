@@ -30,7 +30,8 @@ class PluginRegistry:
     def __init__(self) -> None:
         self.node_definitions: dict[str, NodeDefinition] = dict(NODE_DEFINITIONS)
         self.evaluators: dict[str, Callable[..., Any]] = {}
-        self.statuses: list[PluginStatus] = [PluginStatus("builtin", "3.0.0", "active")]
+        self.statuses: list[PluginStatus] = [PluginStatus("builtin", "4.0.0", "active")]
+        self.isolated_evaluators: dict[str, tuple[Callable[[Any], Any], float]] = {}
         self._discovered = False
 
     def register_node(self, type_id: str, definition: NodeDefinition,
@@ -46,6 +47,18 @@ class PluginRegistry:
 
     def evaluator(self, type_id: str) -> Callable[..., Any] | None:
         return self.evaluators.get(type_id)
+
+    def register_isolated_evaluator(self, type_id: str, evaluator: Callable[[Any], Any],
+                                    timeout: float = 2.0) -> None:
+        """Opt in to per-call process isolation for a JSON-only evaluator."""
+        if type_id not in self.node_definitions: raise ValueError("isolated evaluator node is not registered")
+        if timeout <= 0 or timeout > 300: raise ValueError("isolated evaluator timeout is outside bounds")
+        from .integrations.isolation import importable_callable_path
+        importable_callable_path(evaluator)
+        self.isolated_evaluators[type_id] = (evaluator, float(timeout))
+
+    def isolated(self, type_id: str) -> tuple[Callable[[Any], Any], float] | None:
+        return self.isolated_evaluators.get(type_id)
 
     def discover(self) -> list[PluginStatus]:
         if self._discovered:

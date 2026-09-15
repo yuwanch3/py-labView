@@ -196,7 +196,7 @@ class ResourceManager:
             if close:
                 try:
                     close()
-                except OSError:
+                except Exception:
                     pass
 
 

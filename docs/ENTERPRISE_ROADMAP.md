@@ -1,27 +1,19 @@
-# Enterprise Roadmap Setelah V3
+# Enterprise Roadmap Setelah V4
 
-Dokumen ini menyatakan arah, bukan fitur yang sudah tersedia.
+V4 menyediakan adapter instrumentation fungsional, tetapi deployment production masih memerlukan qualification terpisah.
 
-## Stabilization
+## Qualification
 
-- Process isolation untuk plugin, signed package policy, recovery journal, audit trail, RBAC, dan secrets store.
-- Connector pane grafis, richer typed arrays/clusters, conditional/auto-index tunnel, shift-register UI boundary, multi-frame structure navigation, dan VI diff/merge.
-- TLS adapter, serial hardware qualification, Modbus interoperability matrix, reconnect policy, dan packet/fault soak testing.
-- OPC UA adapter konkret hanya setelah certificate/security policy, namespace, StatusCode/timestamp, subscription, dan reconnect tervalidasi terhadap server nyata.
+- Hardware-in-loop matrix untuk model NI, channel topology, rates, voltage ranges, disconnect, calibration, trigger, buffering, dan vendor runtime versions.
+- VISA interoperability untuk NI-VISA, Keysight VISA, dan `pyvisa-py`; serial device/baud/flow-control matrix; Modbus vendor conformance and fault soak.
+- OPC UA certificate/security-policy provisioning, StatusCode/timestamp surfaces, subscriptions, reconnect, and server interoperability.
+- Vision camera/backend matrix, dataset regression, color/depth contracts, and performance envelopes.
+- Signed packages, SBOM, secrets store, RBAC, audit trail, recovery journal, and OS sandbox profile.
 
-## Hardware
+## Real-Time And FPGA
 
-- Driver vendor nyata memerlukan capability discovery, calibration, buffering, trigger/sample clock, lifecycle, hardware-in-loop test, dan daftar perangkat yang didukung.
-- Tidak ada dukungan NI-DAQmx dalam core v3. Simulated DAQ bukan bukti kompatibilitas hardware.
+Desktop `ThreadPoolExecutor`, GC, and cooperative cancellation are non-real-time. A future target requires watchdog, deployment signing, bounded allocation, priority scheduling, WCET/deadline evidence, and qualified RT OS.
 
-## Real-Time
+HDL export remains a combinational integer/boolean subset. A future FPGA product needs fixed-point IR, clock/reset semantics, simulation, constraints, synthesis/place/route integration, timing/resource reports, vendor board support, and bitstream provenance. Yosys syntax success is not timing closure or a bitstream.
 
-- Runtime proses terpisah, bounded allocation, deployment protocol, watchdog, priority scheduling, WCET/deadline analysis, dan target OS real-time.
-- `ThreadPoolExecutor` desktop dan cooperative cancellation v3 bukan hard real-time atau safety-rated.
-
-## FPGA dan Vision
-
-- FPGA memerlukan IR statis/fixed-point, synthesis backend vendor, cycle-accurate simulation, dan timing/resource report.
-- Vision memerlukan typed image buffers, camera backend, validated operators, dataset regression, dan optional acceleration.
-
-Setiap klaim produksi memerlukan threat model, SBOM, support matrix, signing, qualification evidence, dan dokumentasi keselamatan. V3 belum certified untuk proses kritis.
+Tidak ada klaim safety certification, industrial vision validation, physical hardware validation, hard RT, atau FPGA compilation pada V4.

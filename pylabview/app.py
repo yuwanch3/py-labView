@@ -4,6 +4,8 @@ import copy
 import json
 from pathlib import Path
 import tkinter as tk
+from queue import Empty, Queue
+from threading import Thread
 from tkinter import filedialog, messagebox, simpledialog, ttk
 from typing import Any
 
@@ -43,6 +45,7 @@ class StudioApp(tk.Tk):
         self.probes: set[str] = set()
         self.current_diagram_id: str | None = None
         self.property_vars: dict[str, tk.StringVar] = {}
+        self._closing = False
         self._build_style()
         self._build_menu()
         self._build_ui()
@@ -66,6 +69,7 @@ class StudioApp(tk.Tk):
         file_menu.add_separator()
         file_menu.add_command(label="Save", accelerator="Ctrl+S", command=self.save_project)
         file_menu.add_command(label="Save As...", accelerator="Ctrl+Shift+S", command=self.save_project_as)
+        file_menu.add_command(label="Export Verilog...", command=self.export_verilog)
         file_menu.add_separator()
         file_menu.add_command(label="Exit", command=self.close_app)
         menu.add_cascade(label="File", menu=file_menu)
@@ -89,6 +93,7 @@ class StudioApp(tk.Tk):
         view_menu = tk.Menu(menu, tearoff=False)
         view_menu.add_command(label="Front Panel", accelerator="Ctrl+F", command=self.show_front_panel)
         view_menu.add_command(label="Plugin Status", command=self.show_plugins)
+        view_menu.add_command(label="Hardware / Integration Diagnostics", command=self.show_diagnostics)
         menu.add_cascade(label="View", menu=view_menu)
         help_menu = tk.Menu(menu, tearoff=False)
         help_menu.add_command(label="Quick Help", command=self.show_help)
@@ -536,9 +541,18 @@ class StudioApp(tk.Tk):
         return self.save_project() if answer else True
 
     def close_app(self) -> None:
-        if self._confirm_discard():
-            self.stop()
-            self.destroy()
+        if self._closing or not self._confirm_discard():
+            return
+        self._closing = True
+        self.stop()
+        self.status_var.set("Waiting for vendor calls to finish within their configured timeout...")
+
+        def finish() -> None:
+            if self.controller.join(0):
+                self.destroy()
+            else:
+                self.after(50, finish)
+        finish()
 
     def _update_title(self) -> None:
         name = self.path.name if self.path else self.project.name
@@ -718,6 +732,69 @@ class StudioApp(tk.Tk):
                  for item in statuses]
         lines.append("\nPlugins execute as trusted Python in this process; they are not sandboxed and are never auto-installed.")
         messagebox.showinfo("Plugin Status", "\n".join(lines), parent=self)
+
+    def show_diagnostics(self) -> None:
+        from .integrations.capabilities import (collect_diagnostics, collect_hardware_diagnostics_bounded,
+                                                diagnostics_text)
+
+        dialog = tk.Toplevel(self); dialog.title("Hardware / Integration Diagnostics"); dialog.transient(self)
+        text = tk.Text(dialog, width=100, height=28, wrap="word", state="disabled")
+        text.pack(fill="both", expand=True, padx=8, pady=8)
+
+        results: Queue[tuple[int, Any]] = Queue(); generation = 0; closed = False
+
+        def render(diagnostics: Any) -> None:
+            text.configure(state="normal"); text.delete("1.0", "end")
+            text.insert("end", diagnostics_text(diagnostics))
+            text.insert("end", "\n\nHardware enumeration runs in a bounded child process only after Refresh Hardware. Physical hardware is not validated by this project.")
+            text.configure(state="disabled")
+
+        def poll() -> None:
+            if closed or not dialog.winfo_exists(): return
+            try:
+                while True:
+                    item_generation, diagnostics = results.get_nowait()
+                    if item_generation == generation:
+                        render(diagnostics); software_button.configure(state="normal"); hardware_button.configure(state="normal")
+            except Empty:
+                pass
+            dialog.after(50, poll)
+
+        def refresh(hardware: bool = False) -> None:
+            nonlocal generation
+            generation += 1; requested_generation = generation
+            software_button.configure(state="disabled"); hardware_button.configure(state="disabled")
+            text.configure(state="normal"); text.delete("1.0", "end"); text.insert("end", "Collecting diagnostics..."); text.configure(state="disabled")
+            manifest = self.project.extensions.get("runtime_target") if hardware else None
+
+            def worker() -> None:
+                diagnostics = (collect_hardware_diagnostics_bounded(timeout=10, target_manifest=manifest)
+                               if hardware else collect_diagnostics(refresh_hardware=False))
+                results.put((requested_generation, diagnostics))
+            Thread(target=worker, name="pylabview-diagnostics", daemon=True).start()
+
+        def close_dialog() -> None:
+            nonlocal closed, generation
+            closed = True; generation += 1; dialog.destroy()
+        buttons = ttk.Frame(dialog); buttons.pack(fill="x", padx=8, pady=(0, 8))
+        software_button = ttk.Button(buttons, text="Refresh Software", command=lambda: refresh(False)); software_button.pack(side="left")
+        hardware_button = ttk.Button(buttons, text="Refresh Hardware", command=lambda: refresh(True)); hardware_button.pack(side="left", padx=6)
+        ttk.Button(buttons, text="Close", command=close_dialog).pack(side="right")
+        dialog.protocol("WM_DELETE_WINDOW", close_dialog)
+        poll(); refresh(False)
+
+    def export_verilog(self) -> None:
+        from .hdl import HdlExportError, export_verilog
+
+        try: source = export_verilog(self.graph, self.graph.name)
+        except HdlExportError as exc:
+            messagebox.showerror("Export Verilog", str(exc), parent=self); return
+        path = filedialog.asksaveasfilename(parent=self, title="Export restricted HDL subset",
+                                            defaultextension=".v", filetypes=(("Verilog", "*.v"), ("All Files", "*.*")))
+        if not path: return
+        try: Path(path).write_text(source, encoding="ascii")
+        except OSError as exc: messagebox.showerror("Export Verilog", str(exc), parent=self); return
+        self.status_var.set(f"Exported HDL subset to {path}; no FPGA bitstream was generated")
 
     def configure_connector(self) -> None:
         vi = self.project.vis[self.current_vi_id]

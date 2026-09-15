@@ -220,8 +220,20 @@ class RunController:
         if self.session:
             self.session.token.cancel()
             self.session.debugger.cancel_wait()
-            if self.session.resources is not None:
-                self.session.resources.close_all()
+
+    def join(self, timeout: float | None = None) -> bool:
+        """Wait for the worker without taking ownership of its resources."""
+        if timeout is not None and timeout < 0:
+            raise ValueError("join timeout must be non-negative")
+        thread = self._thread
+        if thread is None:
+            return True
+        thread.join(timeout)
+        return not thread.is_alive()
+
+    def close(self, timeout: float | None = None) -> bool:
+        self.stop()
+        return self.join(timeout)
 
     def update_controls(self, controls: dict[str, Any]) -> None:
         with self._lock:

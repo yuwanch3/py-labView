@@ -16,7 +16,12 @@ from .model import Graph, NODE_DEFINITIONS, Node, Project
 from .typesystem import ErrorCluster, Waveform, coerce, compatible
 from .execution import CancelledError, RunSession
 from .resources import ResourceManager
-from .protocols import ModbusTcpClient, OPCUA_CAPABILITIES, TcpConnection, UdpEndpoint, open_serial
+from .protocols import MAX_NETWORK_BYTES, ModbusTcpClient, TcpConnection, UdpEndpoint
+from .integrations.opcua_adapter import OpcUaAdapter
+from .integrations.reports_adapter import ReportsAdapter
+from .integrations.serial_adapter import SerialAdapter
+from .integrations.visa_adapter import VisaAdapter
+from .integrations.vision_adapter import VisionAdapter
 
 
 class DataflowError(Exception):
@@ -35,8 +40,11 @@ class RunResult:
 
 class DataflowRuntime:
     def __init__(self, clock: Callable[[], float] = time.monotonic, rng: random.Random | None = None,
-                  max_workers: int = 4, data_root: str | Path | None = None,
-                  drivers: DriverRegistry | None = None, max_sync_workers: int = 64) -> None:
+                   max_workers: int = 4, data_root: str | Path | None = None,
+                   drivers: DriverRegistry | None = None, max_sync_workers: int = 64,
+                   visa: VisaAdapter | None = None, opcua: OpcUaAdapter | None = None,
+                   vision: VisionAdapter | None = None, reports: ReportsAdapter | None = None,
+                   serial: SerialAdapter | None = None) -> None:
         self.clock = clock
         self.rng = rng or random.Random()
         self.started_at = self.clock()
@@ -46,6 +54,11 @@ class DataflowRuntime:
         self.max_sync_workers = max_sync_workers
         self.data_root = Path(data_root or Path.cwd()).resolve()
         self.drivers = drivers or DriverRegistry.with_simulation(self.rng)
+        self.visa = visa or VisaAdapter()
+        self.opcua = opcua or OpcUaAdapter()
+        self.vision = vision or VisionAdapter()
+        self.reports = reports or ReportsAdapter()
+        self.serial = serial or SerialAdapter()
         self._daq_configured: dict[tuple[str, str], ChannelConfig] = {}
         self._daq_lock = Lock()
 
@@ -393,7 +406,7 @@ class DataflowRuntime:
                 session.token.check(); ticks.append(self.clock())
                 if session.token.wait(interval): raise CancelledError("execution cancelled")
             return ticks
-        if kind in ("analog_input", "digital_input", "analog_output", "digital_output"):
+        if kind in ("analog_input", "daq_finite_input", "digital_input", "analog_output", "digital_output"):
             return self._daq(node, inputs)
         if kind == "file_read":
             try: return {"text": self._safe_path(node).read_text(encoding="utf-8"), "error": ErrorCluster()}
@@ -500,14 +513,78 @@ class DataflowRuntime:
             return session.resources.get(inputs["client"], "modbus").write_single_register(
                 node.properties.get("address", 0), inputs["value"],
                 float(node.properties.get("timeout", 2)), session.token)
+        modbus_reads = {"modbus_read_coils": "read_coils", "modbus_read_discrete": "read_discrete_inputs",
+                         "modbus_read_input": "read_input_registers"}
+        if kind in modbus_reads:
+            return getattr(session.resources.get(inputs["client"], "modbus"), modbus_reads[kind])(
+                node.properties.get("address", 0), node.properties.get("quantity", 1),
+                float(node.properties.get("timeout", 2)), session.token)
+        modbus_writes = {"modbus_write_coil": "write_single_coil", "modbus_write_coils": "write_multiple_coils",
+                          "modbus_write_registers": "write_multiple_registers"}
+        if kind in modbus_writes:
+            value = inputs["value"] if kind == "modbus_write_coil" else inputs["values"]
+            return getattr(session.resources.get(inputs["client"], "modbus"), modbus_writes[kind])(
+                node.properties.get("address", 0), value, float(node.properties.get("timeout", 2)), session.token)
         if kind == "serial_open":
             return self._session_resource(
                 session, caller_vi, node, "serial",
                 graph_scope,
-                lambda: session.resources.add("serial", open_serial(
+                 lambda: session.resources.add("serial", self.serial.open(
                     str(node.properties.get("port", "COM1")), int(node.properties.get("baudrate", 9600)),
-                    float(node.properties.get("timeout", 1)))))
-        if kind == "opcua_unavailable": raise DataflowError(OPCUA_CAPABILITIES.reason)
+                     float(node.properties.get("timeout", 1)))))
+        if kind == "serial_read":
+            size = self._bounded_int(node, "size", 1024)
+            if size < 1 or size > MAX_NETWORK_BYTES: raise DataflowError("serial size is outside bounds")
+            data = session.resources.get(inputs["connection"], "serial").read(size)
+            if len(data) > size: raise DataflowError("serial backend exceeded requested size")
+            if node.properties.get("mode", "bytes") == "text":
+                return bytes(data).decode(str(node.properties.get("encoding", "utf-8")))
+            return bytes(data)
+        if kind == "serial_write":
+            data = inputs["data"]
+            mode = node.properties.get("mode", "bytes")
+            if mode == "text": data = str(data).encode(str(node.properties.get("encoding", "utf-8")))
+            if not isinstance(data, bytes): raise DataflowError("serial bytes mode requires bytes")
+            if not 1 <= len(data) <= MAX_NETWORK_BYTES: raise DataflowError("serial write size is outside bounds")
+            return int(session.resources.get(inputs["connection"], "serial").write(data))
+        if kind == "serial_close": session.resources.close(inputs["connection"]); return None
+        if kind == "visa_open":
+            return self._session_resource(session, caller_vi, node, "visa", graph_scope,
+                lambda: session.resources.add("visa", self.visa.open(str(node.properties.get("resource", "")),
+                    float(node.properties.get("timeout", 2)), int(node.properties.get("max_bytes", 1048576)))))
+        if kind in ("visa_write", "visa_query", "visa_read_raw", "visa_write_raw"):
+            instrument = session.resources.get(inputs["instrument"], "visa")
+            if kind == "visa_write": return instrument.write(inputs["text"])
+            if kind == "visa_query": return instrument.query(inputs["text"])
+            if kind == "visa_read_raw": return instrument.read_raw()
+            return instrument.write_raw(inputs["data"])
+        if kind == "visa_close": session.resources.close(inputs["instrument"]); return None
+        if kind == "opcua_connect":
+            return self._session_resource(session, caller_vi, node, "opcua", graph_scope,
+                lambda: session.resources.add("opcua", self.opcua.connect(str(node.properties.get("endpoint", "")),
+                    float(node.properties.get("timeout", 2)))))
+        if kind == "opcua_read":
+            return session.resources.get(inputs["connection"], "opcua").read(str(node.properties.get("node_id", "")))
+        if kind == "opcua_write":
+            session.resources.get(inputs["connection"], "opcua").write(str(node.properties.get("node_id", "")), inputs["value"]); return None
+        if kind == "opcua_disconnect": session.resources.close(inputs["connection"]); return None
+        if kind == "image_read": return self.vision.read(self._safe_path(node))
+        if kind == "camera_capture": return self.vision.capture(int(node.properties.get("camera_index", 0)))
+        if kind == "image_grayscale": return self.vision.grayscale(inputs["image"])
+        if kind == "image_blur": return self.vision.blur(inputs["image"], int(node.properties.get("kernel", 5)))
+        if kind == "image_threshold": return self.vision.threshold(inputs["image"], node.properties.get("threshold", 127), node.properties.get("maximum", 255))
+        if kind == "image_canny": return self.vision.canny(inputs["image"], node.properties.get("low", 50), node.properties.get("high", 150))
+        if kind == "image_resize": return self.vision.resize(inputs["image"], node.properties.get("width", 640), node.properties.get("height", 480))
+        if kind == "template_match": return self.vision.template_match(inputs["image"], inputs["template"])
+        if kind == "image_save":
+            try: self.vision.save(inputs["image"], self._safe_path(node)); return ErrorCluster()
+            except (OSError, ValueError, RuntimeError) as exc: return ErrorCluster(True, 40, str(exc))
+        if kind == "report_generate":
+            try:
+                path = self.reports.generate(inputs["data"], self._safe_path(node), str(node.properties.get("format", "html")), str(node.properties.get("title", "PyLabView Report")))
+                return {"path": str(path), "error": ErrorCluster()}
+            except (OSError, ValueError, RuntimeError, ImportError) as exc:
+                return {"path": "", "error": ErrorCluster(True, 50, str(exc))}
         if kind == "visual_case":
             diagram_id = str(node.properties.get("true_diagram" if inputs["selector"] else "false_diagram", ""))
             return self._run_structure(project, caller_vi, diagram_id, inputs["value"], 0, session)
@@ -528,9 +605,17 @@ class DataflowRuntime:
             vi = project.vis[target]
             return {terminal.name: child.port_values[(terminal.node_id, terminal.port)] for terminal in vi.connector_outputs}
         if kind in ("display", "chart"): return inputs["value"]
+        if kind == "image_display": return inputs["image"]
         if kind == "log":
             value = inputs["value"]; logs.append(f"{node.properties.get('prefix', '')}{value}"); return value
         from .plugins import DEFAULT_PLUGIN_REGISTRY
+        isolated = DEFAULT_PLUGIN_REGISTRY.isolated(kind)
+        if isolated:
+            from .integrations.isolation import IsolatedEvaluatorHost
+            evaluator, timeout = isolated
+            with IsolatedEvaluatorHost(evaluator) as host:
+                return host.call({"node": {"id": node.id, "type": node.type, "properties": node.properties},
+                                  "inputs": inputs}, timeout)
         evaluator = DEFAULT_PLUGIN_REGISTRY.evaluator(kind)
         if evaluator:
             return evaluator(node, inputs, session)
@@ -574,13 +659,16 @@ class DataflowRuntime:
         driver_name, channel = str(node.properties.get("driver", "simulated")), str(node.properties.get("channel", ""))
         driver = self.drivers.get(driver_name)
         key = (driver_name, channel)
-        config = ChannelConfig(channel, node.type, float(node.properties.get("minimum", -10)),
-                               float(node.properties.get("maximum", 10)))
+        kind = "analog_input" if node.type == "daq_finite_input" else node.type
+        samples = int(node.properties.get("samples", 1)) if node.type == "daq_finite_input" else 1
+        config = ChannelConfig(channel, kind, float(node.properties.get("minimum", -10)),
+                               float(node.properties.get("maximum", 10)), samples,
+                               float(node.properties.get("rate", 1000)), float(node.properties.get("timeout", 2)))
         with self._daq_lock:
             if self._daq_configured.get(key) != config:
                 driver.configure(config)
                 self._daq_configured[key] = config
-            if node.type.endswith("input"):
+            if kind.endswith("input"):
                 return driver.read(channel)
             driver.write(channel, inputs["value"])
             return None
@@ -607,10 +695,14 @@ def _wire_key(wire: Any) -> str:
 _WAIT_NODE_TYPES = {
     "delay", "timed_loop", "queue_get", "notifier_wait", "event_wait", "channel_receive",
     "tcp_connect", "tcp_read", "udp_receive", "modbus_connect", "modbus_read_holding",
-    "serial_open", "subvi", "visual_case", "visual_for",
+    "modbus_read_coils", "modbus_read_discrete", "modbus_read_input", "serial_open", "serial_read",
+    "visa_open", "visa_query", "visa_read_raw", "opcua_connect", "opcua_read", "camera_capture",
+    "subvi", "visual_case", "visual_for",
 }
 
 _ACTION_NODE_TYPES = {
     "queue_put", "notifier_set", "event_fire", "channel_send", "tcp_write", "udp_send",
     "modbus_write_register", "resource_close",
+    "modbus_write_coil", "modbus_write_coils", "modbus_write_registers", "serial_write", "serial_close",
+    "visa_write", "visa_write_raw", "visa_close", "opcua_write", "opcua_disconnect", "image_save", "report_generate",
 }

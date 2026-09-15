@@ -15,6 +15,9 @@ class ChannelConfig:
     kind: str
     minimum: float = -10.0
     maximum: float = 10.0
+    samples: int = 1
+    rate: float = 1000.0
+    timeout: float = 2.0
 
 
 class DAQDriver(ABC):
@@ -22,7 +25,7 @@ class DAQDriver(ABC):
     def configure(self, channel: ChannelConfig) -> None: ...
 
     @abstractmethod
-    def read(self, channel: str) -> float | bool: ...
+    def read(self, channel: str) -> float | bool | list[float]: ...
 
     @abstractmethod
     def write(self, channel: str, value: float | bool) -> None: ...
@@ -76,6 +79,7 @@ class SimulatedDAQDriver(DAQDriver):
 class DriverRegistry:
     def __init__(self) -> None:
         self._drivers: dict[str, DAQDriver] = {}
+        self.unavailable: dict[str, str] = {}
 
     def register(self, name: str, driver: DAQDriver) -> None:
         if not name or name in self._drivers:
@@ -86,10 +90,23 @@ class DriverRegistry:
         try:
             return self._drivers[name]
         except KeyError as exc:
+            if name in self.unavailable:
+                raise ValueError(f"DAQ driver '{name}' unavailable: {self.unavailable[name]}") from exc
             raise ValueError(f"unknown DAQ driver: {name}") from exc
+
+    def mark_unavailable(self, name: str, reason: str) -> None:
+        self.unavailable[name] = reason
+
+    def names(self) -> tuple[str, ...]:
+        return tuple(self._drivers)
 
     @classmethod
     def with_simulation(cls, rng: random.Random | None = None) -> "DriverRegistry":
         registry = cls()
         registry.register("simulated", SimulatedDAQDriver(rng))
+        try:
+            from .integrations.nidaqmx_adapter import NIDAQmxDriver
+            registry.register("nidaqmx", NIDAQmxDriver())
+        except Exception as exc:
+            registry.mark_unavailable("nidaqmx", f"official nidaqmx package/driver unavailable: {exc}")
         return registry

@@ -1,43 +1,27 @@
-# Arsitektur PyLabView Studio 3
+# Arsitektur PyLabView Studio 4
 
-## Boundary Modul
+## Boundaries
 
-- `model.py`: compatibility model `Project`, `VirtualInstrument`, root `Graph`, persisted `subdiagrams`, connector, dan strict schema object validation.
-- `typesystem.py`: wire types, coercion, `Waveform`, dan `ErrorCluster`.
-- `persistence.py`: load v1/v2/v3 dan atomic v3 save.
-- `execution.py`: `CancellationToken`, debugger trace, `RunSession`, dan asynchronous `RunController`.
-- `resources.py`: session-scoped queue, notifier, event, channel, dan ownership validation.
-- `protocols.py`: bounded TCP/UDP, Modbus TCP FC03/FC06, optional pyserial detection, dan OPC UA contract/capability.
-- `plugins.py`: builtin/name-spaced registry dan entry-point discovery.
-- `runtime.py`: compatibility scheduler/evaluator. Debug mode memakai satu worker; normal mode tetap menjalankan level independen secara paralel.
-- `front_panel.py`, `canvas_editor.py`, `app.py`: Tk presentation layer. Worker tidak memanggil Tk.
+- `model.py`, `typesystem.py`, `persistence.py`: strict schema v3, graph types, and atomic project persistence.
+- `execution.py`, `resources.py`, `runtime.py`: desktop CPython dataflow scheduler, cooperative cancellation, and session-owned handles.
+- `protocols.py`: bounded stdlib TCP/UDP and Modbus TCP FC01/02/03/04/05/06/15/16; pyserial loader remains compatibility API.
+- `integrations/`: optional capability/diagnostic, NI-DAQmx, VISA, OPC UA, vision, report, and plugin process adapters. Constructors accept backend injection and do not import optional packages at core startup.
+- `hdl.py`: validated combinational graph-to-Verilog subset and optional bounded Yosys syntax subprocess.
+- `targets.py`: bounded external target manifest/handshake. A response is reported honestly and never upgrades desktop execution into hard RT.
+- `front_panel.py`, `canvas_editor.py`, `app.py`: Tk presentation. Runtime workers never call Tk.
 
-Model tetap evolusioner agar consumer v2 tidak rusak. Builtin node mempertahankan ID lama; plugin baru wajib memakai type ID namespaced.
+## Lifecycle And Bounds
 
-## Execution
+`RunSession` owns a `ResourceManager`. Its worker `finally` is the sole cleanup owner; cancellation never closes vendor handles concurrently from the UI thread. VISA, serial, and OPC UA wrappers serialize operations and close. Non-interruptible vendor calls can delay cancellation until their configured timeout. NI operations create one task, configure channels/timing, perform one bounded operation, and close in `finally`. Camera capture similarly releases its device after one frame. Report output uses a temporary file and `os.replace`.
 
-`RunController` membuat coordinator thread dan satu `RunSession`. UI memanggil `drain_events()` melalui `after(30, ...)`; setiap event result membawa snapshot result tick-nya sendiri. Update control disalin di bawah lock pada batas tick. Synchronous `DataflowRuntime.run()` membuat session sementara dan menutup semua resource setelah result selesai.
+Network operations cap one call at 16 MiB and 300 seconds. Serial requests and VISA writes use the same payload ceiling; VISA response size is checked after PyVISA returns and is not a pre-allocation bound. NI samples cap at 1,000,000 and rate at 10 MHz (software guard only, not hardware capability). Images validate shape, dtype, decoded memory metadata, and cap at 100 million pixels, but OpenCV decode allocation occurs before those metadata checks. Reports cap at 100,000 rows and 1 million cells. Paths resolve beneath `data_root`; this canonical check is not an adversarial filesystem sandbox.
 
-Cancellation bersifat kooperatif. Delay/timed loop memakai `CancellationToken.wait`; resource waits memeriksa token setiap maksimal 50 ms. Socket memakai timeout terbatas. Python tidak dapat menghentikan plugin worker yang mengabaikan kontrak cancellation.
+## Optionality
 
-Feedback adalah satu-satunya dependency-breaking edge. Scheduler mengabaikan incoming edge menuju Feedback saat topological ordering, membaca nilai state sebelumnya, lalu commit input setelah tick sukses. Graph cycle tanpa Feedback tetap ditolak.
+Missing packages produce explicit unavailable capabilities or runtime node errors. Project loading only needs node definitions and never imports vendor APIs. Diagnostics software probing is side-effect-light; NI device and VISA resource enumeration occur only when the user presses Refresh Hardware.
 
-## Debugger
+Process-isolated plugin evaluators exchange bounded JSON with request IDs. They can contain crashes and enforce a parent timeout, but child code retains the user's OS permissions and therefore is not a security sandbox.
 
-Debugger memeriksa breakpoint sebelum node dikirim, mencatat monotonic sequence/timestamp, dan membatasi trace. Probe memakai endpoint wire yang stabil. Pause menghentikan dispatch berikutnya; pekerjaan yang sudah berjalan tidak dihentikan paksa. Compute node memakai satu worker saat debug. Primitive wait dan action sinkronisasi memakai pool terpisah; setiap primitive dalam satu level mendapat slot agar wait tidak menahan worker producer. Jumlahnya dibatasi `max_sync_workers` dan graph di atas batas ditolak. Completion primitive tersebut dapat concurrent walaupun urutan dispatch tetap deterministik.
+## Persistence
 
-## Structures
-
-VI mempunyai root graph dan dictionary subdiagram. `visual_case` menunjuk True/False region. `visual_for` menunjuk body region; `structure_input`, `structure_output`, dan `iteration_terminal` menjadi boundary contract. Runtime mengeksekusi subdiagram melalui session/cancellation/debugger yang sama. Legacy functional structures tidak diam-diam berubah makna.
-
-## Resources dan Protocol
-
-Semua handle dibungkus `ResourceRef` dengan UUID owner dan dimiliki satu `ResourceManager`. Queue adalah consume-once FIFO; notifier/event memakai generation; channel adalah bounded typed message queue. Close membangunkan waiter. State dan cached resource memakai scope `(VI, diagram, node)`.
-
-TCP dan UDP memakai stdlib `socket`. TCP resolve/connect/read/write dipoll terhadap deadline dan cancellation; resolver OS yang tidak dapat dihentikan diisolasi pada maksimal delapan daemon resolver tanpa memiliki socket. Modbus memvalidasi MBAP transaction/protocol/length/unit, function, exception, byte count, dan FC06 echo serta menutup stream setelah mismatch. Serial hanya dimuat bila pyserial tersedia. OPC UA core tidak mempunyai evaluator jaringan dan capability `available=False`.
-
-## Persistence dan Trust
-
-V3 menolak unknown core fields dan menyediakan dictionary `extensions` pada root, panel, dan panel item. Save memakai temporary file, flush, `fsync`, dan `os.replace`. Migrasi v2 menghasilkan panel bounds deterministik dan mempertahankan legacy nodes.
-
-Canonical `data_root` bukan process sandbox. Plugin entry point menjalankan Python tepercaya dalam proses aplikasi, tanpa `eval`/`exec` dan tanpa auto-install. Deployment yang membuka proyek/plugin tak tepercaya memerlukan isolasi OS/proses sendiri.
+Application release 4.0.0 deliberately keeps project schema version 3. New behavior is represented by node type/properties and root/panel extension points, so no v3-to-v4 data migration is necessary.

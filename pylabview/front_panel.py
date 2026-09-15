@@ -6,6 +6,7 @@ from tkinter import simpledialog
 from typing import Any, Callable
 
 from .model import Graph, _normalized_panel, update_chart_history
+from .integrations.vision_adapter import ImageFrame
 
 
 class PanelDesigner(tk.Canvas):
@@ -101,7 +102,11 @@ class PanelDesigner(tk.Canvas):
         node_id = item["terminal_node_id"]
         value = self.values.get(node_id, "--")
         kind = item["kind"]
-        if kind == "boolean_control" or (kind == "indicator" and isinstance(value, bool)):
+        if kind == "image_indicator" and isinstance(value, ImageFrame):
+            self.create_text(x + w / 2, y + h / 2 + 10,
+                             text=f"Image {value.width} x {value.height} x {value.channels}\n(in-memory frame)",
+                             justify="center", tags=("panel_item", tag))
+        elif kind == "boolean_control" or (kind == "indicator" and isinstance(value, bool)):
             active = bool(value)
             self.create_oval(x + w / 2 - 18, y + h / 2 - 10, x + w / 2 + 18, y + h / 2 + 26,
                              fill="#35b85a" if active else "#555", outline="#222", tags=("panel_item", tag))

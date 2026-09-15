@@ -1,69 +1,42 @@
-# PyLabView Studio 3.0.0
+# PyLabView Studio 4.0.0
 
-PyLabView Studio adalah aplikasi desktop visual dataflow independen untuk Python 3.10+ dan `tkinter`. V3 menyatukan Front Panel dan Block Diagram dalam satu window, menjalankan diagram di background, serta menyediakan primitive state, debugging, sinkronisasi, dan protokol jaringan yang benar-benar dieksekusi.
+PyLabView Studio adalah aplikasi desktop visual dataflow independen untuk Python 3.10+ dan `tkinter`. V4 mempertahankan core standard-library dan schema proyek v3, lalu menambahkan instrumentation adapters nyata yang dimuat secara opsional. Proyek ini tidak berafiliasi dengan National Instruments; LabVIEW adalah merek dagang pemiliknya.
 
-Proyek ini bukan clone lengkap NI LabVIEW, bukan produk National Instruments, dan tidak berafiliasi atau didukung oleh National Instruments. LabVIEW adalah merek dagang pemiliknya masing-masing.
+## Instrumentation V4
 
-## Fitur V3
+- NI-DAQmx melalui package resmi `nidaqmx`: AI/AO/DI/DO, physical channel, range, finite samples/rate, task cleanup, dan device discovery eksplisit.
+- PyVISA: list/open resource, timeout, text write/query, raw read/write, post-read response-size validation, dan close.
+- PySerial: open/read/write/close untuk bytes atau encoded text.
+- OPC UA melalui `asyncua.sync.Client`: connect, read/write value, dan disconnect. Tidak mengklaim subscription.
+- Modbus TCP FC01/02/03/04/05/06/15/16 dengan validation, exception response, dan LSB-first coil packing.
+- OpenCV/NumPy vision: file/camera single frame, grayscale, blur, threshold, Canny, resize, template match, save, dan image metadata indicator.
+- Report HTML/CSV selalu tersedia; XLSX, DOCX, dan PDF opsional.
+- Restricted combinational HDL exporter dan optional Yosys syntax check. Ini bukan FPGA compiler atau bitstream generator.
+- Opt-in JSON plugin evaluator process host untuk timeout/crash isolation. Ini bukan security sandbox.
+- Hardware / Integration Diagnostics memisahkan software probe dari explicit hardware Refresh.
 
-- Workspace `ttk.Notebook` dengan embedded **Front Panel** dan **Block Diagram**.
-- Front Panel free-layout berbasis Canvas: persisted bounds, grid/snap, drag, resize, mode Edit/Operate, dan binding item ke terminal node.
-- `RunController` background dengan cooperative cancellation. Tk hanya mem-poll event melalui `after()`.
-- Breakpoint node, probe wire, bounded trace, pause/resume, dan deterministic single-step saat debug memakai satu worker.
-- Feedback state antar-tick continuous session. Cycle biasa tetap ditolak.
-- Visual Case dan For Loop memakai subdiagram tersimpan; editor membuka region melalui **Open Structure**. For Loop menyediakan input tunnel, output tunnel, iteration terminal, dan iteration bound.
-- FIFO bounded queue, latest-generation notifier, named event, dan typed message channel dengan timeout/cancellation/close semantics.
-- TCP client, UDP endpoint, dan Modbus TCP client FC03/FC06 nyata dengan timeout, size bound, serta frame validation.
-- Serial tersedia hanya bila `pyserial` dipasang. OPC UA hanya mempunyai adapter contract dan ditampilkan sebagai unavailable; tidak ada implementasi palsu.
-- Plugin registry dengan node namespaced, API compatibility check, `importlib.metadata` discovery, dan isolasi kegagalan import.
-- JSON `pylabview-project` v3 dengan `extensions`, atomic save, persisted panel/subdiagram, serta migrasi v1/v2.
-- API sinkron `DataflowRuntime.run()`, `Graph`, `load_graph()`, dan `save_graph()` tetap tersedia sebagai compatibility facade.
+Semua resource external dimiliki worker run session dan ditutup pada sukses, error, atau cancellation. Stop tidak menutup handle dari thread UI. Vendor call yang tidak interruptible baru berhenti saat timeout adapter berakhir. File report/image dibatasi ke `DataflowRuntime.data_root`; network, payload, sample, image, dan timeout memiliki bounds. Batas VISA response diterapkan setelah backend selesai membaca response dan bukan memory-allocation bound.
 
-Legacy `case`, `sequence`, `for_loop`, dan `while_loop` tetap dapat dijalankan dan diberi nama **Legacy Functional**. Mereka bukan visual structure bersarang.
+## Instalasi
 
-## Menjalankan
+Core tidak mempunyai dependency PyPI:
 
 ```bash
-./run.sh
-# atau
 python -m pylabview
-```
-
-Self-test tanpa GUI:
-
-```bash
 python -m pylabview --self-test
 ```
 
-Serial opsional:
+Pasang adapter yang diperlukan saja atau seluruh profile:
 
 ```bash
-python -m pip install pyserial
+python -m pip install -r requirements-optional.txt
 ```
 
-Tidak ada dependency runtime pihak ketiga untuk core. `tkinter` harus tersedia dari distribusi Python/OS.
+NI memerlukan package Python `nidaqmx` **dan** NI-DAQmx vendor runtime/driver yang sesuai. PyVISA memerlukan backend VISA, misalnya NI-VISA vendor runtime atau `pyvisa-py`; instalasi `PyVISA` saja tidak selalu menyediakan transport. Windows Full build tidak membundel driver vendor NI/VISA.
 
-## Workflow
+## Compatibility
 
-1. Pilih VI dari VI Explorer.
-2. Gunakan tab Front Panel untuk drag/resize item dan mode Operate untuk mengubah control.
-3. Gunakan tab Block Diagram untuk menambah node dan wire.
-4. Pilih Visual Case/For lalu **Open Structure** untuk mengedit region; **Root Diagram** kembali ke root.
-5. Pilih node lalu **Breakpoint**, atau pilih wire lalu **Probe**.
-6. Jalankan F5 atau continuous F6. Stop membatalkan delay, loop, dan wait secara kooperatif.
-
-File v1/v2 dibuka sebagai model v3 dengan migration report dan layout panel deterministik. Save berikutnya menulis v3; file sumber tidak ditimpa sampai user memilih tujuan save.
-
-## Network dan Resource
-
-- Semua timeout network harus lebih dari 0 dan maksimal 300 detik.
-- Operasi network dibatasi maksimal 16 MiB per call.
-- TCP bekerja pada `bytes`; encoding text harus dilakukan terpisah.
-- UDP tidak menjamin delivery/order.
-- Modbus memakai alamat register 0-based dan hanya mengklaim FC03/FC06.
-- Resource reference hanya valid di run session pembuatnya dan ditutup saat session selesai.
-
-File I/O tetap dibatasi pada `data_root` dengan canonical path checking. Ini bukan sandbox adversarial yang tahan race symlink. Plugin Python juga bukan sandbox dan berjalan dengan hak proses pengguna; aplikasi tidak auto-install plugin/dependency dari proyek.
+App version adalah 4.0.0; format persisted tetap `pylabview-project` schema version 3. Node/properties baru dapat disimpan tanpa field schema baru. V1/v2 tetap dimigrasi ke schema v3; semua proyek v3 tetap dapat dibuka.
 
 ## Test
 
@@ -75,12 +48,13 @@ python -c "from pathlib import Path; from pylabview.persistence import load_proj
 git diff --check
 ```
 
-Protocol integration tests hanya memakai loopback lokal dan tidak mengakses internet.
+Test tidak mengakses internet atau hardware. Adapter hardware diuji dengan fake backend; protocol memakai loopback/stub lokal. OpenCV/NumPy aktual hanya dijalankan oleh full-profile frozen self-test. Lihat `docs/V4_INSTRUMENTATION_GUIDE.md` dan `docs/HARDWARE_VALIDATION.md` untuk support matrix.
 
-## Windows
+## Windows Builds
 
-Jalankan `build_windows.bat` pada Windows. PyInstaller menghasilkan `dist\PyLabViewStudio.exe`; workflow release menjalankan test, build, frozen `--self-test`, checksum, dan artifact. Build atau test software tidak membuktikan kompatibilitas hardware atau certification.
+- `build_windows.bat`: small core executable; optional packages tetap tidak dibundel.
+- `build_windows_full.bat`: memasang `requirements-optional.txt` dan menghasilkan `PyLabViewStudioFull.exe`.
 
-## Batasan Jujur
+CI membangun core dan full profile pada job terpisah. Full executable menjalankan `--self-test-full`, yang mengimpor seluruh dependency opsional dan hanya memakai data in-memory/fake tanpa enumerasi hardware.
 
-PyLabView Studio 3 bukan hard real-time, safety-rated, FPGA compiler, Vision system, NI hardware driver, atau implementasi OPC UA penuh. Cancellation thread bersifat kooperatif. Plugin tidak diisolasi proses. Modbus terbatas FC03/FC06. Nested editor membuka satu subdiagram pada satu waktu dan belum menyediakan semua tunnel mode LabVIEW. Lihat `docs/V3_USER_GUIDE.md`, `docs/PLUGIN_SDK.md`, dan `ARCHITECTURE.md`.
+Keduanya tetap memerlukan vendor driver/runtime eksternal untuk NI hardware dan backend VISA. Build, unit test, dan syntax check bukan bukti hardware qualification, hard real-time, safety certification, atau FPGA timing closure.
