@@ -4,14 +4,16 @@ import copy
 import json
 from pathlib import Path
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 from typing import Any
 
 from . import __version__
 from .canvas_editor import DiagramCanvas
 from .front_panel import FrontPanel
-from .model import Graph, NODE_DEFINITIONS, Node
-from .persistence import load_graph, save_graph
+from .model import (ConnectorTerminal, Graph, NODE_DEFINITIONS, Node, Project,
+                    project_snapshot, restore_project_snapshot)
+from .persistence import load_project, save_project
+from .typesystem import DATA_TYPES, compatible, editor_value_text
 from .runtime import DataflowRuntime
 
 
@@ -21,7 +23,9 @@ class StudioApp(tk.Tk):
         self.title("PyLabView Studio")
         self.geometry("1240x780")
         self.minsize(900, 600)
-        self.graph = Graph()
+        self.project = Project()
+        self.current_vi_id = self.project.main_vi
+        self.graph = self.project.main.graph
         self.path: Path | None = None
         self.dirty = False
         self.undo_stack: list[dict[str, Any]] = []
@@ -91,6 +95,9 @@ class StudioApp(tk.Tk):
         self.run_button.pack(side="left", padx=2)
         ttk.Button(toolbar, text="Stop", command=self.stop).pack(side="left", padx=2)
         ttk.Button(toolbar, text="Front Panel", command=self.show_front_panel).pack(side="left", padx=10)
+        ttk.Button(toolbar, text="Validate", command=self.validate_current).pack(side="left", padx=2)
+        ttk.Button(toolbar, text="Connector", command=self.configure_connector).pack(side="left", padx=2)
+        ttk.Button(toolbar, text="Create SubVI", command=self.create_subvi).pack(side="left", padx=2)
         self.zoom_label = ttk.Label(toolbar, text="Ctrl+wheel: zoom")
         self.zoom_label.pack(side="right", padx=8)
 
@@ -108,16 +115,29 @@ class StudioApp(tk.Tk):
         work.add(center, weight=5)
         work.add(inspector, weight=1)
 
+        ttk.Label(library, text="VI Explorer", font=("TkDefaultFont", 10, "bold")).pack(anchor="w")
+        self.vi_list = tk.Listbox(library, height=5, exportselection=False)
+        self.vi_list.pack(fill="x", pady=(3, 2))
+        self.vi_list.bind("<<ListboxSelect>>", self._switch_vi_event)
+        vi_buttons = ttk.Frame(library)
+        vi_buttons.pack(fill="x", pady=(0, 8))
+        ttk.Button(vi_buttons, text="+", width=3, command=self.add_vi).pack(side="left")
+        ttk.Button(vi_buttons, text="Rename", command=self.rename_vi).pack(side="left", padx=2)
+        ttk.Button(vi_buttons, text="Delete", command=self.delete_vi).pack(side="left")
+        ttk.Button(vi_buttons, text="Main", command=self.set_main_vi).pack(side="left", padx=2)
+        ttk.Label(library, text="Node Search", font=("TkDefaultFont", 10, "bold")).pack(anchor="w")
+        self.search_var = tk.StringVar()
+        search = ttk.Entry(library, textvariable=self.search_var)
+        search.pack(fill="x", pady=(3, 4))
+        self.search_var.trace_add("write", lambda *_args: self._populate_library())
         self.library_tree = ttk.Treeview(library, show="tree", selectmode="browse")
         self.library_tree.pack(fill="both", expand=True)
-        categories: dict[str, str] = {}
-        for node_type, definition in NODE_DEFINITIONS.items():
-            parent = categories.setdefault(definition.category, self.library_tree.insert("", "end", text=definition.category, open=True))
-            self.library_tree.insert(parent, "end", iid=f"type:{node_type}", text=definition.title)
+        self._populate_library()
+        self._refresh_vi_list()
         self.library_tree.bind("<Double-1>", self._library_add)
         ttk.Label(library, text="Double-click to add", foreground="#58677a").pack(pady=(5, 0))
 
-        self.canvas = DiagramCanvas(center, self.graph, self.select_node, self.checkpoint, self.changed)
+        self.canvas = DiagramCanvas(center, self.graph, self.select_node, self.checkpoint, self.changed, self._connection_error)
         self.canvas.pack(fill="both", expand=True)
 
         self.inspector_body = ttk.Frame(inspector)
@@ -131,6 +151,22 @@ class StudioApp(tk.Tk):
         scroll.pack(side="right", fill="y")
         self.status_var = tk.StringVar(value="Ready")
         ttk.Label(self, textvariable=self.status_var, anchor="w", padding=(7, 3)).pack(fill="x")
+
+    def _populate_library(self) -> None:
+        if not hasattr(self, "library_tree"):
+            return
+        self.library_tree.delete(*self.library_tree.get_children())
+        query = self.search_var.get().strip().lower() if hasattr(self, "search_var") else ""
+        categories: dict[str, str] = {}
+        for node_type, definition in NODE_DEFINITIONS.items():
+            if node_type == "subvi" or (query and query not in f"{definition.title} {definition.category} {node_type}".lower()):
+                continue
+            parent = categories.setdefault(definition.category, self.library_tree.insert("", "end", text=definition.category, open=True))
+            self.library_tree.insert(parent, "end", iid=f"type:{node_type}", text=definition.title)
+
+    def _connection_error(self, message: str) -> None:
+        self.status_var.set(message)
+        self.log("WIRE ERROR " + message)
 
     def _bind_shortcuts(self) -> None:
         self.bind_all("<Control-n>", lambda _e: self.new_project())
@@ -160,7 +196,7 @@ class StudioApp(tk.Tk):
         self.canvas.redraw()
 
     def checkpoint(self) -> None:
-        self.undo_stack.append(copy.deepcopy(self.graph.to_dict()))
+        self.undo_stack.append(project_snapshot(self.project, self.current_vi_id))
         del self.undo_stack[:-100]
         self.redo_stack.clear()
 
@@ -174,18 +210,23 @@ class StudioApp(tk.Tk):
     def undo(self) -> None:
         if not self.undo_stack:
             return
-        self.redo_stack.append(copy.deepcopy(self.graph.to_dict()))
-        self._replace_graph(Graph.from_dict(self.undo_stack.pop()))
+        self.redo_stack.append(project_snapshot(self.project, self.current_vi_id))
+        self._restore_snapshot(self.undo_stack.pop())
         self.dirty = True
         self._update_title()
 
     def redo(self) -> None:
         if not self.redo_stack:
             return
-        self.undo_stack.append(copy.deepcopy(self.graph.to_dict()))
-        self._replace_graph(Graph.from_dict(self.redo_stack.pop()))
+        self.undo_stack.append(project_snapshot(self.project, self.current_vi_id))
+        self._restore_snapshot(self.redo_stack.pop())
         self.dirty = True
         self._update_title()
+
+    def _restore_snapshot(self, snapshot: dict[str, Any]) -> None:
+        self.project, self.current_vi_id = restore_project_snapshot(snapshot)
+        self._replace_graph(self.project.vis[self.current_vi_id].graph)
+        self._refresh_vi_list()
 
     def copy_node(self) -> None:
         node_id = self.canvas.selected_node
@@ -223,8 +264,10 @@ class StudioApp(tk.Tk):
         fields = {"label": node.label, **node.properties}
         for key, value in fields.items():
             ttk.Label(self.inspector_body, text=key.replace("_", " ").title()).pack(anchor="w", pady=(5, 1))
-            var = tk.StringVar(value=json.dumps(value) if isinstance(value, bool) else str(value))
-            entry = ttk.Entry(self.inspector_body, textvariable=var)
+            var = tk.StringVar(value=editor_value_text(value))
+            entry = (ttk.Combobox(self.inspector_body, textvariable=var, state="readonly",
+                                  values=("auto", "numeric", "string", "boolean", "array", "led", "gauge", "progress", "thermometer", "waveform_chart"))
+                     if key == "display_type" else ttk.Entry(self.inspector_body, textvariable=var))
             entry.pack(fill="x")
             entry.bind("<Return>", lambda _e, nid=node_id: self.apply_properties(nid))
             self.property_vars[key] = var
@@ -253,6 +296,11 @@ class StudioApp(tk.Tk):
                     parsed[key] = int(raw)
                 elif isinstance(old, float):
                     parsed[key] = float(raw)
+                elif isinstance(old, (list, dict)):
+                    value = json.loads(raw)
+                    if not isinstance(value, type(old)):
+                        raise ValueError(f"{key} must be a JSON {type(old).__name__}")
+                    parsed[key] = value
                 else:
                     parsed[key] = raw
         except ValueError as exc:
@@ -267,7 +315,7 @@ class StudioApp(tk.Tk):
 
     def run_once(self, schedule_next: bool = False) -> None:
         controls = self.front_panel.control_values() if self.front_panel else {}
-        result = self.runtime.run(self.graph, controls)
+        result = self.runtime.run(self.graph, controls, self.project, self.current_vi_id)
         self.canvas.set_statuses(result.statuses)
         if self.front_panel:
             self.front_panel.update_values(result.values)
@@ -320,7 +368,10 @@ class StudioApp(tk.Tk):
         self.path = None
         self.undo_stack.clear()
         self.redo_stack.clear()
-        self._replace_graph(Graph())
+        self.project = Project()
+        self.current_vi_id = self.project.main_vi
+        self._replace_graph(self.project.main.graph)
+        self._refresh_vi_list()
         self.dirty = False
         self._update_title()
         self.log("New project created")
@@ -332,15 +383,18 @@ class StudioApp(tk.Tk):
         if not path:
             return
         try:
-            graph = load_graph(path)
-        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            project = load_project(path)
+        except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
             messagebox.showerror("Open failed", str(exc), parent=self)
             return
         self.stop()
         self.path = Path(path)
         self.undo_stack.clear()
         self.redo_stack.clear()
-        self._replace_graph(graph)
+        self.project = project
+        self.current_vi_id = project.main_vi
+        self._replace_graph(project.main.graph)
+        self._refresh_vi_list()
         self.dirty = False
         self._update_title()
         self.log(f"Opened {path}")
@@ -349,8 +403,8 @@ class StudioApp(tk.Tk):
         if self.path is None:
             return self.save_project_as()
         try:
-            save_graph(self.graph, self.path)
-        except OSError as exc:
+            save_project(self.project, self.path)
+        except (OSError, ValueError, TypeError) as exc:
             messagebox.showerror("Save failed", str(exc), parent=self)
             return False
         self.dirty = False
@@ -362,12 +416,26 @@ class StudioApp(tk.Tk):
         path = filedialog.asksaveasfilename(parent=self, title="Save Project", defaultextension=".json", initialfile=(self.path.name if self.path else "project.json"), filetypes=(("PyLabView Project", "*.json"), ("All Files", "*.*")))
         if not path:
             return False
-        self.path = Path(path)
-        self.graph.name = self.path.stem
-        return self.save_project()
+        destination = Path(path)
+        try:
+            candidate = Project.from_dict(self.project.to_dict())
+            candidate.name = destination.stem
+            save_project(candidate, destination)
+        except (OSError, ValueError, TypeError) as exc:
+            messagebox.showerror("Save failed", str(exc), parent=self)
+            return False
+        self.path = destination
+        self.project.name = destination.stem
+        self.dirty = False
+        self._update_title()
+        self.status_var.set(f"Saved {self.path}")
+        return True
 
     def _replace_graph(self, graph: Graph) -> None:
         self.graph = graph
+        if self.current_vi_id in self.project.vis:
+            self.project.vis[self.current_vi_id].graph = graph
+            graph.project = self.project
         self.canvas.set_graph(graph)
         self.select_node(None)
         if self.front_panel:
@@ -386,8 +454,172 @@ class StudioApp(tk.Tk):
             self.destroy()
 
     def _update_title(self) -> None:
-        name = self.path.name if self.path else self.graph.name
-        self.title(f"{'*' if self.dirty else ''}{name} - PyLabView Studio")
+        name = self.path.name if self.path else self.project.name
+        self.title(f"{'*' if self.dirty else ''}{name} [{self.project.vis[self.current_vi_id].name}] - PyLabView Studio")
+
+    def _refresh_vi_list(self) -> None:
+        if not hasattr(self, "vi_list"):
+            return
+        self.vi_list.delete(0, "end")
+        self._vi_order = list(self.project.vis)
+        for vi_id in self._vi_order:
+            vi = self.project.vis[vi_id]
+            self.vi_list.insert("end", ("* " if vi_id == self.project.main_vi else "  ") + vi.name)
+        if self.current_vi_id in self._vi_order:
+            index = self._vi_order.index(self.current_vi_id)
+            self.vi_list.selection_set(index)
+
+    def _switch_vi_event(self, _event: tk.Event) -> None:
+        selection = self.vi_list.curselection()
+        if selection:
+            self.switch_vi(self._vi_order[selection[0]])
+
+    def switch_vi(self, vi_id: str) -> None:
+        if vi_id == self.current_vi_id or vi_id not in self.project.vis:
+            return
+        self.stop()
+        self.current_vi_id = vi_id
+        self._replace_graph(self.project.vis[vi_id].graph)
+        self._update_title()
+
+    def add_vi(self) -> None:
+        name = simpledialog.askstring("Add VI", "VI name:", parent=self)
+        if not name:
+            return
+        if not name.strip() or any(vi.name == name.strip() for vi in self.project.vis.values()):
+            messagebox.showerror("Add VI", "VI name must be non-empty and unique", parent=self)
+            return
+        self.checkpoint()
+        try: vi = self.project.add_vi(name)
+        except ValueError as exc: messagebox.showerror("Add VI", str(exc), parent=self); return
+        self.current_vi_id = vi.id
+        self._replace_graph(vi.graph)
+        self.changed()
+        self._refresh_vi_list()
+
+    def rename_vi(self) -> None:
+        vi = self.project.vis[self.current_vi_id]
+        name = simpledialog.askstring("Rename VI", "VI name:", initialvalue=vi.name, parent=self)
+        if not name: return
+        if name.strip() == vi.name:
+            return
+        if not name.strip() or any(item.name == name.strip() and item.id != vi.id for item in self.project.vis.values()):
+            messagebox.showerror("Rename VI", "VI name must be non-empty and unique", parent=self)
+            return
+        self.checkpoint()
+        try: self.project.rename_vi(vi.id, name)
+        except ValueError as exc: messagebox.showerror("Rename VI", str(exc), parent=self); return
+        self.changed(); self._refresh_vi_list()
+
+    def delete_vi(self) -> None:
+        vi_id = self.current_vi_id
+        if vi_id == self.project.main_vi:
+            messagebox.showerror("Delete VI", "cannot delete main VI", parent=self)
+            return
+        if any(n.type == "subvi" and n.properties.get("vi_id") == vi_id
+               for vi in self.project.vis.values() for n in vi.graph.nodes.values()):
+            messagebox.showerror("Delete VI", "VI is referenced by a SubVI node", parent=self)
+            return
+        if not messagebox.askyesno("Delete VI", f"Delete {self.project.vis[vi_id].name}?", parent=self):
+            return
+        self.checkpoint()
+        try: self.project.delete_vi(vi_id)
+        except ValueError as exc: messagebox.showerror("Delete VI", str(exc), parent=self); return
+        self.current_vi_id = self.project.main_vi
+        self._replace_graph(self.project.main.graph)
+        self.changed(); self._refresh_vi_list()
+
+    def set_main_vi(self) -> None:
+        if self.current_vi_id == self.project.main_vi:
+            return
+        self.checkpoint()
+        self.project.set_main(self.current_vi_id)
+        self.changed(); self._refresh_vi_list()
+
+    def create_subvi(self) -> None:
+        choices = [vi for vi in self.project.vis.values() if vi.id != self.current_vi_id]
+        if not choices:
+            messagebox.showinfo("Create SubVI", "Add another VI first.", parent=self); return
+        name = simpledialog.askstring("Create SubVI", "Target VI name:\n" + ", ".join(vi.name for vi in choices), parent=self)
+        target = next((vi for vi in choices if vi.name == name), None)
+        if not target:
+            if name is not None: messagebox.showerror("Create SubVI", "Unknown VI name.", parent=self)
+            return
+        self.checkpoint()
+        node = self.graph.add_node("subvi", 100, 100)
+        node.label, node.properties["vi_id"] = target.name, target.id
+        self.changed(); self.canvas.redraw()
+
+    def configure_connector(self) -> None:
+        vi = self.project.vis[self.current_vi_id]
+        dialog = tk.Toplevel(self)
+        dialog.title("Connector Pane - " + vi.name)
+        dialog.transient(self); dialog.grab_set()
+        ttk.Label(dialog, text="Satu terminal per baris: direction,name,node_id,port,type\nInput wajib menunjuk output control yang unik; output menunjuk output node.").pack(anchor="w", padx=10, pady=8)
+        text = tk.Text(dialog, width=75, height=14)
+        text.pack(fill="both", expand=True, padx=10)
+        for direction, terminals in (("input", vi.connector_inputs), ("output", vi.connector_outputs)):
+            for term in terminals: text.insert("end", f"{direction},{term.name},{term.node_id},{term.port},{term.data_type}\n")
+        def apply() -> None:
+            inputs: list[ConnectorTerminal] = []; outputs: list[ConnectorTerminal] = []
+            try:
+                for line in text.get("1.0", "end").splitlines():
+                    if not line.strip(): continue
+                    direction, name, node_id, port, data_type = [part.strip() for part in line.split(",")]
+                    if direction not in ("input", "output") or data_type not in DATA_TYPES: raise ValueError("direction/type connector tidak valid")
+                    (inputs if direction == "input" else outputs).append(ConnectorTerminal(name, node_id, port, data_type))
+                old_in, old_out = vi.connector_inputs, vi.connector_outputs
+                vi.connector_inputs, vi.connector_outputs = inputs, outputs
+                try:
+                    self.project.validate_connectors()
+                finally:
+                    vi.connector_inputs, vi.connector_outputs = old_in, old_out
+                valid_inputs = {term.name for term in inputs}
+                valid_outputs = {term.name for term in outputs}
+                input_types = {term.name: term.data_type for term in inputs}
+                output_types = {term.name: term.data_type for term in outputs}
+                affected: list[tuple[str, Any]] = []
+                for parent_vi in self.project.vis.values():
+                    calls = {node.id for node in parent_vi.graph.nodes.values()
+                             if node.type == "subvi" and node.properties.get("vi_id") == vi.id}
+                    for wire in parent_vi.graph.wires:
+                        invalid_source = wire.source_node in calls and (
+                            wire.source_port not in valid_outputs
+                            or not compatible(output_types[wire.source_port], parent_vi.graph.port_type(
+                                parent_vi.graph.nodes[wire.target_node], "in", wire.target_port)))
+                        invalid_target = wire.target_node in calls and (
+                            wire.target_port not in valid_inputs
+                            or not compatible(parent_vi.graph.port_type(
+                                parent_vi.graph.nodes[wire.source_node], "out", wire.source_port),
+                                input_types[wire.target_port]))
+                        if invalid_source or invalid_target:
+                            affected.append((parent_vi.id, wire))
+            except (KeyError, StopIteration, ValueError, TypeError) as exc: messagebox.showerror("Connector Pane", str(exc), parent=dialog); return
+            if affected and not messagebox.askyesno(
+                    "Connector Pane", f"Perubahan ini akan menghapus {len(affected)} wire yang tidak lagi valid. Lanjutkan?",
+                    parent=dialog):
+                return
+            if inputs == old_in and outputs == old_out:
+                dialog.destroy()
+                return
+            self.checkpoint()
+            vi.connector_inputs, vi.connector_outputs = inputs, outputs
+            affected_by_vi: dict[str, set[int]] = {}
+            for parent_id, wire in affected:
+                affected_by_vi.setdefault(parent_id, set()).add(id(wire))
+            for parent_id, wire_ids in affected_by_vi.items():
+                parent_graph = self.project.vis[parent_id].graph
+                parent_graph.wires = [wire for wire in parent_graph.wires if id(wire) not in wire_ids]
+            self.changed(); self.canvas.redraw(); dialog.destroy()
+        ttk.Button(dialog, text="Apply", command=apply).pack(pady=8)
+
+    def validate_current(self) -> None:
+        errors = self.runtime.validate(self.graph, self.project, self.current_vi_id)
+        if errors:
+            for error in errors: self.log("VALIDATION " + error)
+            self.status_var.set(f"Validation failed: {len(errors)} error(s)")
+        else:
+            self.status_var.set("Validation successful")
 
     def log(self, text: str) -> None:
         self.console.configure(state="normal")

@@ -1,0 +1,13 @@
+{
+  "format": "pylabview-project", "version": 2, "name": "Producer Consumer Simulation", "main_vi": "main",
+  "vis": [{"id": "main", "name": "Main VI", "graph": {"name": "Main VI", "nodes": [
+    {"id": "producer", "type": "timed_loop", "x": 50, "y": 80, "label": "Producer Ticks", "properties": {"iterations": 3, "interval": 0.001, "max_iterations": 100}},
+    {"id": "consumer", "type": "for_loop", "x": 280, "y": 80, "label": "Consumer", "properties": {"max_iterations": 100, "operation": "identity", "scale": 1.0}},
+    {"id": "size", "type": "array_size", "x": 490, "y": 80, "label": "Consumed Count", "properties": {}},
+    {"id": "display", "type": "display", "x": 680, "y": 80, "label": "Items", "properties": {"display_type": "progress", "style": "default"}}
+  ], "wires": [
+    {"source_node": "producer", "source_port": "out", "target_node": "consumer", "target_port": "array", "data_type": "array"},
+    {"source_node": "consumer", "source_port": "out", "target_node": "size", "target_port": "array", "data_type": "array"},
+    {"source_node": "size", "source_port": "out", "target_node": "display", "target_port": "value", "data_type": "numeric"}
+  ]}, "connector_pane": {"inputs": [], "outputs": []}, "front_panel": {"title": "Producer Consumer", "layout": {}}}]
+}
