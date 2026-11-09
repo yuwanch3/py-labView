@@ -674,13 +674,28 @@ def arduino_telemetry_reader(
                 state["elapsed"] = new_elapsed
 
                 # Fallback stage detection:
-                # The firmware normally emits a dedicated
-                # TARGET_RPM:<rpm> line on every stage change.
+                # Only official Standard stages may create a
+                # measurement-stage event.
+                #
+                # Internal firmware ramp targets such as
+                # 1250, 1500, 1750, 2250, etc. are NOT
+                # measurement stages.
+
+                official_standard_stages = (
+                    1000,
+                    2000,
+                    3000,
+                    4000,
+                    5000,
+                    6000,
+                )
+
                 if (
                     not soft_stop_requested
                     and previous_target > 0.0
                     and new_target > 0.0
                     and new_target != previous_target
+                    and int(round(new_target)) in official_standard_stages
                 ):
                     stage_changed = True
 

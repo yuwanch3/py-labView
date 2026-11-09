@@ -18,7 +18,7 @@
 
 - `handlers/`: typed `HandlerContext`, `NodeHandler` protocol, duplicate-safe registry, and category modules for all built-in node behavior. `DataflowRuntime._evaluate` resolves one handler and invokes it; it does not dispatch on node type.
 
-- `handlers/spinning_drop.py`: Standard Mode domain handlers for passive Arduino telemetry listening, START/STOP commands, ACK handling, `RPM:;PWM:;TIME:;TARGET:` telemetry, and `TARGET_RPM:` stage events parsed tolerantly from one stream. It also provides the PC-side RPM stall watchdog, event-driven stage-watcher table building, wire calibration, radius-form Vonnegut IFT, pycnometer/delta-density calculators, automatic 10-sample stage capture, reference/image behavior, and the shared stage-sample mechanism used by Manual Mode.
+- `handlers/spinning_drop.py`: Standard Mode domain handlers for passive Arduino telemetry listening, START/STOP commands, ACK handling, `RPM:;PWM:;TIME:;TARGET:` telemetry, and `TARGET_RPM:` stage events parsed tolerantly from one stream. Telemetry target-change fallback accepts only the official Standard stages (1000 through 6000 RPM in 1000 RPM increments), preventing internal firmware ramp targets from becoming measurement-stage events. It also provides the PC-side RPM stall watchdog, event-driven stage-watcher table building, wire calibration, radius-form Vonnegut IFT, pycnometer/delta-density calculators, automatic 10-sample stage capture, reference/image behavior, and the shared stage-sample mechanism used by Manual Mode.
 
 - `handlers/spinning_drop_manual.py`: Manual RPM Mode domain handlers. The PC selects Manual Mode and sends the requested target RPM, while PWM remains controlled by the Arduino PID. The handler consumes the same bounded serial telemetry stream and the `TARGET_REACHED:<rpm>` event. Manual measurement rows are published only after the shared 10-sample stage batch is complete.
 
@@ -40,7 +40,7 @@
 
 - `targets.py`: bounded external target manifest/handshake. A response is reported honestly and never upgrades desktop execution into hard RT.
 
-- `front_panel.py`, `canvas_editor.py`, `app.py`: Tk presentation. Runtime workers never call Tk directly.
+- `front_panel.py`, `canvas_editor.py`, `app.py`: Tk presentation. Front Panel and Block Diagram canvases expose visual vertical scrollbars while retaining their existing mouse-wheel and zoom behavior. Runtime workers never call Tk directly.
 
 - `app.py` owns application-level run/stop presentation behavior, session-based measurement export, and mode-aware UI integration. Stop Continuous stops the measurement/motor run while preserving the intended live-camera workflow; Global Stop, including the bottom front-panel STOP control, stops the active motor/controller/runtime path consistently in Standard and Manual modes.
 

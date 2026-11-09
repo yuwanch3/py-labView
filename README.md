@@ -12,6 +12,7 @@ PyLabView Studio 8.0.0 menyediakan workflow spinning-drop IFT dengan dua mode op
 - **Manual RPM Mode**: operator menentukan target RPM hingga 6000 RPM, sedangkan PWM tetap dikendalikan otomatis oleh PID.
 - **Ganti Mode** tersedia langsung dari workspace melalui menu `Mode`, sehingga operator dapat berpindah antara Standard Mode dan Manual RPM Mode tanpa menutup aplikasi.
 - Saat **Ganti Mode** dijalankan, motor/runtime aktif dihentikan terlebih dahulu, resource camera dan serial ditutup secara aman, workspace lama di-reset, lalu layar pemilihan mode ditampilkan kembali. Mode berikutnya dimulai dengan workspace dan session state yang fresh.
+- Front Panel dan Block Diagram menyediakan scrollbar vertikal visual, selain navigasi mouse-wheel dan zoom yang sudah tersedia.
 - Arduino serial telemetry untuk RPM, PWM, elapsed time, dan current target.
 - Kamera/OpenCV untuk live image dan pengukuran diameter.
 - Wire/reference calibration untuk konversi diameter pixel ke millimeter.
@@ -25,6 +26,7 @@ PyLabView Studio 8.0.0 menyediakan workflow spinning-drop IFT dengan dua mode op
 - Automatic Excel `.xlsx` export dengan tiga sheet: Measurement Summary, Stage Samples, dan Statistics.
 - Global Stop dan Stop Continuous untuk kontrol measurement/runtime.
 - **Stop Bertahap** untuk deselerasi motor secara gradual pada Standard Mode dan Manual RPM Mode; hard Stop tetap bekerja secara langsung sebagai emergency stop.
+- Fallback telemetry Standard Mode hanya menerima 1000, 2000, 3000, 4000, 5000, dan 6000 RPM sebagai stage pengukuran; target ramp internal firmware tidak membuat measurement stage tambahan.
 
 Data pengguna disimpan pada:
 

@@ -172,6 +172,22 @@ class SpinningDropNodeTests(unittest.TestCase):
         self.assertFalse(result["autostop"])
         self.assertFalse(result["error"].status)
 
+    def test_telemetry_fallback_ignores_internal_ramp_targets(self):
+        stream = TelemetryStream([b"RPM:900;PWM:100;TIME:1.000;TARGET:1000\n"])
+        session = RunSession(resources=ResourceManager())
+        runtime = DataflowRuntime(serial=SerialAdapter(ArduinoBackend(stream)))
+
+        initial = self.reader_pass(runtime, session)
+        stream.chunks.append(b"RPM:1100;PWM:110;TIME:2.000;TARGET:1250\n")
+        ramp = self.reader_pass(runtime, session)
+        stream.chunks.append(b"RPM:1900;PWM:120;TIME:3.000;TARGET:2000\n")
+        official = self.reader_pass(runtime, session)
+
+        self.assertFalse(initial["stage_changed"])
+        self.assertFalse(ramp["stage_changed"])
+        self.assertTrue(official["stage_changed"])
+        self.assertEqual(official["current_target_rpm"], 2000.0)
+
     def test_ack_and_stage_events(self):
         # TARGET_RPM:2000: the first stage event a real firmware ever sends
         # (the initial 1000 target is implicit at START, never announced).

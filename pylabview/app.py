@@ -1666,9 +1666,32 @@ class StudioApp(tk.Tk):
             ][0]["front_panel"]
         )
 
+        # ============================================================
+        # FRONT PANEL CANVAS + VERTICAL SCROLLBAR
+        #
+        # Patch:
+        # Menambahkan scrollbar vertikal visual di sisi kanan
+        # Front Panel.
+        #
+        # Mouse wheel / zoom / behavior PanelDesigner tetap
+        # menggunakan implementasi yang sudah ada.
+        # ============================================================
+
+        front_panel_canvas_frame = (
+            ttk.Frame(
+                panel_tab
+            )
+        )
+
+        front_panel_canvas_frame.pack(
+            fill="both",
+            expand=True,
+        )
+
+
         self.front_panel = (
             PanelDesigner(
-                panel_tab,
+                front_panel_canvas_frame,
                 self.graph,
                 self.project.main.front_panel,
                 self._panel_changed,
@@ -1676,18 +1699,65 @@ class StudioApp(tk.Tk):
             )
         )
 
+
+        front_panel_scrollbar = (
+            ttk.Scrollbar(
+                front_panel_canvas_frame,
+                orient="vertical",
+                command=self.front_panel.yview,
+            )
+        )
+
+
+        self.front_panel.configure(
+            yscrollcommand=front_panel_scrollbar.set
+        )
+
+
         self.project.main.front_panel = (
             self.front_panel.panel
         )
 
+
         self.front_panel.pack(
+            side="left",
             fill="both",
             expand=True,
         )
 
+
+        front_panel_scrollbar.pack(
+            side="right",
+            fill="y",
+        )
+
+
+        # ============================================================
+        # BLOCK DIAGRAM CANVAS + VERTICAL SCROLLBAR
+        #
+        # Patch:
+        # Menambahkan scrollbar vertikal visual di sisi kanan
+        # Block Diagram.
+        #
+        # Mouse wheel / zoom / edit behavior DiagramCanvas tetap
+        # menggunakan implementasi yang sudah ada.
+        # ============================================================
+
+        diagram_canvas_frame = (
+            ttk.Frame(
+                diagram_tab
+            )
+        )
+
+        diagram_canvas_frame.pack(
+            fill="both",
+            expand=True,
+        )
+
+
         self.canvas = (
             DiagramCanvas(
-                diagram_tab,
+                diagram_canvas_frame,
                 self.graph,
                 self.select_node,
                 self.checkpoint,
@@ -1697,9 +1767,31 @@ class StudioApp(tk.Tk):
             )
         )
 
+
+        diagram_scrollbar = (
+            ttk.Scrollbar(
+                diagram_canvas_frame,
+                orient="vertical",
+                command=self.canvas.yview,
+            )
+        )
+
+
+        self.canvas.configure(
+            yscrollcommand=diagram_scrollbar.set
+        )
+
+
         self.canvas.pack(
+            side="left",
             fill="both",
             expand=True,
+        )
+
+
+        diagram_scrollbar.pack(
+            side="right",
+            fill="y",
         )
 
     # ============================================================

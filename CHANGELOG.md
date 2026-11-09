@@ -6,6 +6,7 @@ All notable user-facing changes to PyLabView Studio are recorded here.
 
 ### Added
 
+- Added visible vertical scrollbars to the Front Panel and Block Diagram canvases while preserving existing mouse-wheel and zoom behavior.
 - Added session-based measurement storage under `Documents\GMJ PyLabView\Sessions`.
 - Added one session folder per application launch and selected operating mode, including `Session_Info.json`.
 - Added dedicated per-session capture folders for `Reference`, RPM-based `Stages`, and RPM-based `Analysis`.
@@ -29,6 +30,7 @@ All notable user-facing changes to PyLabView Studio are recorded here.
 
 ### Fixed
 
+- Prevented internal firmware ramp targets such as 1250, 1500, and 1750 RPM from being interpreted as Standard Mode measurement stages by telemetry fallback detection.
 - Prevented automatic stage samples from changing the frozen wire calibration / scale factor during a measurement run.
 - Restored visible Picture Comparison and Grafik Kawat updates for all 10 stage samples.
 - Prevented Analysis PNG rendering from blocking the Tkinter UI refresh path.
