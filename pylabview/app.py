@@ -16,7 +16,6 @@ from . import __version__
 from .canvas_editor import DiagramCanvas
 from .front_panel import PanelDesigner
 from .model import (
-    ConnectorTerminal,
     Graph,
     NODE_DEFINITIONS,
     Node,
@@ -28,7 +27,7 @@ from .model import (
     _normalized_panel,
 )
 from .persistence import load_project, save_project
-from .typesystem import DATA_TYPES, compatible, editor_value_text
+from .typesystem import editor_value_text
 from .runtime import DataflowRuntime
 from .execution import RunController
 from .plugins import DEFAULT_PLUGIN_REGISTRY
@@ -179,7 +178,7 @@ class StudioApp(tk.Tk):
         # Untuk spinning-drop ini cukup untuk tahap stabilisasi.
         # Nanti kalau sudah lancar bisa dinaikkan menjadi 0.10
         # untuk sekitar 10 FPS.
-        self._runtime_ui_interval = 0.060
+        self._runtime_ui_interval = 0.100
 
         self.operating_mode: str | None = None
         self._startup_screen: StartupScreen | None = None
@@ -1091,38 +1090,6 @@ class StudioApp(tk.Tk):
                 "Stop Bertahap",
                 self.stop_gradually,
             ),
-            (
-                "Front Panel",
-                self.show_front_panel,
-            ),
-            (
-                "Validate",
-                self.validate_current,
-            ),
-            (
-                "Connector",
-                self.configure_connector,
-            ),
-            (
-                "Create SubVI",
-                self.create_subvi,
-            ),
-            (
-                "Breakpoint",
-                self.toggle_breakpoint,
-            ),
-            (
-                "Probe",
-                self.toggle_probe,
-            ),
-            (
-                "Open Structure",
-                self.open_structure,
-            ),
-            (
-                "Root Diagram",
-                self.open_root_diagram,
-            ),
         )
 
         for text, command in actions:
@@ -1140,16 +1107,6 @@ class StudioApp(tk.Tk):
                     else 2
                 ),
             )
-
-        self.zoom_label = ttk.Label(
-            toolbar,
-            text="Ctrl+wheel: zoom",
-        )
-
-        self.zoom_label.pack(
-            side="right",
-            padx=8,
-        )
 
     # ============================================================
     # HARDWARE STATUS DASHBOARD
@@ -1696,6 +1653,7 @@ class StudioApp(tk.Tk):
                 self.project.main.front_panel,
                 self._panel_changed,
                 self._panel_values_changed,
+                before_change=self.checkpoint,
             )
         )
 
@@ -4588,7 +4546,8 @@ class StudioApp(tk.Tk):
             # freeze_analysis_snapshot(), so Analysis PNG #n sees the same
             # Picture Comparison / Grafik Kawat state as sample #n.
             self.front_panel.update_values(
-                display_values
+                display_values,
+                redraw=False,
             )
             self._stage_display_override_active = True
 
@@ -5973,88 +5932,6 @@ class StudioApp(tk.Tk):
         self._refresh_vi_list()
 
     # ============================================================
-    # CREATE SUBVI
-    # ============================================================
-
-    def create_subvi(
-        self,
-    ) -> None:
-
-        choices = [
-            vi
-            for vi
-            in self.project.vis.values()
-            if vi.id
-            != self.current_vi_id
-        ]
-
-        if not choices:
-
-            messagebox.showinfo(
-                "Create SubVI",
-                "Add another VI first.",
-                parent=self,
-            )
-
-            return
-
-        name = simpledialog.askstring(
-            "Create SubVI",
-            "Target VI name:\n"
-            + ", ".join(
-                vi.name
-                for vi
-                in choices
-            ),
-            parent=self,
-        )
-
-        target = next(
-            (
-                vi
-                for vi
-                in choices
-                if vi.name
-                == name
-            ),
-            None,
-        )
-
-        if not target:
-
-            if name is not None:
-
-                messagebox.showerror(
-                    "Create SubVI",
-                    "Unknown VI name.",
-                    parent=self,
-                )
-
-            return
-
-        self.checkpoint()
-
-        node = (
-            self.graph.add_node(
-                "subvi",
-                100,
-                100,
-            )
-        )
-
-        node.label = (
-            target.name
-        )
-
-        node.properties[
-            "vi_id"
-        ] = target.id
-
-        self.changed()
-
-        self.canvas.redraw()
-
-    # ============================================================
     # STRUCTURES
     # ============================================================
 
@@ -6186,221 +6063,6 @@ class StudioApp(tk.Tk):
             self.project,
             self.current_vi_id,
             node,
-        )
-
-    def open_structure(
-        self,
-    ) -> None:
-
-        node_id = (
-            self.canvas.selected_node
-        )
-
-        if (
-            not node_id
-            or node_id
-            not in self.graph.nodes
-        ):
-
-            self.status_var.set(
-                "Select a visual Case or "
-                "For Loop structure"
-            )
-
-            return
-
-        node = (
-            self.graph.nodes[
-                node_id
-            ]
-        )
-
-        if node.type == "visual_case":
-
-            choice = (
-                messagebox.askyesno(
-                    "Open Case Structure",
-                    (
-                        "Open True region?\n"
-                        "Choose No for False."
-                    ),
-                    parent=self,
-                )
-            )
-
-            diagram_id = str(
-                node.properties.get(
-                    (
-                        "true_diagram"
-                        if choice
-                        else "false_diagram"
-                    ),
-                    "",
-                )
-            )
-
-        elif node.type == "visual_for":
-
-            diagram_id = str(
-                node.properties.get(
-                    "body_diagram",
-                    "",
-                )
-            )
-
-        else:
-
-            self.status_var.set(
-                "Selected node is not "
-                "a visual structure"
-            )
-
-            return
-
-        graph = (
-            self.project.vis[
-                self.current_vi_id
-            ].subdiagrams.get(
-                diagram_id
-            )
-        )
-
-        if not graph:
-
-            messagebox.showerror(
-                "Open Structure",
-                "Structure subdiagram is missing",
-                parent=self,
-            )
-
-            return
-
-        self.current_diagram_id = (
-            diagram_id
-        )
-
-        self.graph = graph
-
-        self.canvas.set_graph(
-            graph
-        )
-
-        self.workspace.select(
-            1
-        )
-
-        self.status_var.set(
-            f"Editing subdiagram: {graph.name}"
-        )
-
-    def open_root_diagram(
-        self,
-    ) -> None:
-
-        self.current_diagram_id = None
-
-        self.graph = (
-            self.project.vis[
-                self.current_vi_id
-            ].graph
-        )
-
-        self.canvas.set_graph(
-            self.graph
-        )
-
-        self.workspace.select(
-            1
-        )
-
-        self.status_var.set(
-            "Editing root Block Diagram"
-        )
-
-    # ============================================================
-    # BREAKPOINT / PROBE
-    # ============================================================
-
-    def toggle_breakpoint(
-        self,
-    ) -> None:
-
-        node_id = (
-            self.canvas.selected_node
-        )
-
-        if not node_id:
-
-            self.status_var.set(
-                "Select a node to toggle "
-                "its breakpoint"
-            )
-
-            return
-
-        if node_id in self.breakpoints:
-
-            self.breakpoints.remove(
-                node_id
-            )
-
-            state = "removed"
-
-        else:
-
-            self.breakpoints.add(
-                node_id
-            )
-
-            state = "set"
-
-        self.status_var.set(
-            f"Breakpoint {state}: "
-            f"{self.graph.nodes[node_id].label}"
-        )
-
-    def toggle_probe(
-        self,
-    ) -> None:
-
-        wire = (
-            self.canvas.selected_wire
-        )
-
-        if not wire:
-
-            self.status_var.set(
-                "Select a wire to toggle "
-                "its probe"
-            )
-
-            return
-
-        key = (
-            f"{wire.source_node}:"
-            f"{wire.source_port}->"
-            f"{wire.target_node}:"
-            f"{wire.target_port}"
-        )
-
-        if key in self.probes:
-
-            self.probes.remove(
-                key
-            )
-
-            state = "removed"
-
-        else:
-
-            self.probes.add(
-                key
-            )
-
-            state = "set"
-
-        self.status_var.set(
-            f"Probe {state}: {key}"
         )
 
     # ============================================================
@@ -6792,426 +6454,6 @@ class StudioApp(tk.Tk):
         )
 
     # ============================================================
-    # CONNECTOR
-    # ============================================================
-
-    def configure_connector(
-        self,
-    ) -> None:
-
-        vi = (
-            self.project.vis[
-                self.current_vi_id
-            ]
-        )
-
-        dialog = tk.Toplevel(
-            self
-        )
-
-        dialog.title(
-            "Connector Pane - "
-            + vi.name
-        )
-
-        dialog.transient(
-            self
-        )
-
-        dialog.grab_set()
-
-        ttk.Label(
-            dialog,
-            text=(
-                "Satu terminal per baris: "
-                "direction,name,node_id,port,type\n"
-                "Input wajib menunjuk output control yang unik; "
-                "output menunjuk output node."
-            ),
-        ).pack(
-            anchor="w",
-            padx=10,
-            pady=8,
-        )
-
-        text = tk.Text(
-            dialog,
-            width=75,
-            height=14,
-        )
-
-        text.pack(
-            fill="both",
-            expand=True,
-            padx=10,
-        )
-
-        for (
-            direction,
-            terminals,
-        ) in (
-            (
-                "input",
-                vi.connector_inputs,
-            ),
-            (
-                "output",
-                vi.connector_outputs,
-            ),
-        ):
-
-            for term in terminals:
-
-                text.insert(
-                    "end",
-                    (
-                        f"{direction},"
-                        f"{term.name},"
-                        f"{term.node_id},"
-                        f"{term.port},"
-                        f"{term.data_type}\n"
-                    ),
-                )
-
-        def apply() -> None:
-
-            inputs: list[
-                ConnectorTerminal
-            ] = []
-
-            outputs: list[
-                ConnectorTerminal
-            ] = []
-
-            try:
-
-                for line in (
-                    text.get(
-                        "1.0",
-                        "end",
-                    ).splitlines()
-                ):
-
-                    if not line.strip():
-                        continue
-
-                    (
-                        direction,
-                        name,
-                        node_id,
-                        port,
-                        data_type,
-                    ) = [
-                        part.strip()
-                        for part
-                        in line.split(
-                            ","
-                        )
-                    ]
-
-                    if (
-                        direction
-                        not in (
-                            "input",
-                            "output",
-                        )
-                        or data_type
-                        not in DATA_TYPES
-                    ):
-
-                        raise ValueError(
-                            "direction/type connector "
-                            "tidak valid"
-                        )
-
-                    (
-                        inputs
-                        if direction
-                        == "input"
-                        else outputs
-                    ).append(
-                        ConnectorTerminal(
-                            name,
-                            node_id,
-                            port,
-                            data_type,
-                        )
-                    )
-
-                old_in = (
-                    vi.connector_inputs
-                )
-
-                old_out = (
-                    vi.connector_outputs
-                )
-
-                vi.connector_inputs = (
-                    inputs
-                )
-
-                vi.connector_outputs = (
-                    outputs
-                )
-
-                try:
-
-                    self.project.validate_connectors()
-
-                finally:
-
-                    vi.connector_inputs = (
-                        old_in
-                    )
-
-                    vi.connector_outputs = (
-                        old_out
-                    )
-
-                valid_inputs = {
-                    term.name
-                    for term
-                    in inputs
-                }
-
-                valid_outputs = {
-                    term.name
-                    for term
-                    in outputs
-                }
-
-                input_types = {
-                    term.name: term.data_type
-                    for term
-                    in inputs
-                }
-
-                output_types = {
-                    term.name: term.data_type
-                    for term
-                    in outputs
-                }
-
-                affected: list[
-                    tuple[
-                        Graph,
-                        Any,
-                    ]
-                ] = []
-
-                for parent_vi in (
-                    self.project.vis.values()
-                ):
-
-                    for parent_graph in (
-                        parent_vi.graph,
-                        *parent_vi.subdiagrams.values(),
-                    ):
-
-                        calls = {
-                            node.id
-                            for node
-                            in parent_graph.nodes.values()
-                            if (
-                                node.type
-                                == "subvi"
-                                and node.properties.get(
-                                    "vi_id"
-                                )
-                                == vi.id
-                            )
-                        }
-
-                        for wire in (
-                            parent_graph.wires
-                        ):
-
-                            invalid_source = (
-                                wire.source_node
-                                in calls
-                                and (
-                                    wire.source_port
-                                    not in valid_outputs
-                                    or not compatible(
-                                        output_types[
-                                            wire.source_port
-                                        ],
-                                        parent_graph.port_type(
-                                            parent_graph.nodes[
-                                                wire.target_node
-                                            ],
-                                            "in",
-                                            wire.target_port,
-                                        ),
-                                    )
-                                )
-                            )
-
-                            invalid_target = (
-                                wire.target_node
-                                in calls
-                                and (
-                                    wire.target_port
-                                    not in valid_inputs
-                                    or not compatible(
-                                        parent_graph.port_type(
-                                            parent_graph.nodes[
-                                                wire.source_node
-                                            ],
-                                            "out",
-                                            wire.source_port,
-                                        ),
-                                        input_types[
-                                            wire.target_port
-                                        ],
-                                    )
-                                )
-                            )
-
-                            if (
-                                invalid_source
-                                or invalid_target
-                            ):
-
-                                affected.append(
-                                    (
-                                        parent_graph,
-                                        wire,
-                                    )
-                                )
-
-            except (
-                KeyError,
-                StopIteration,
-                ValueError,
-                TypeError,
-            ) as exc:
-
-                messagebox.showerror(
-                    "Connector Pane",
-                    str(exc),
-                    parent=dialog,
-                )
-
-                return
-
-            if (
-                affected
-                and not messagebox.askyesno(
-                    "Connector Pane",
-                    (
-                        "Perubahan ini akan menghapus "
-                        f"{len(affected)} wire "
-                        "yang tidak lagi valid. Lanjutkan?"
-                    ),
-                    parent=dialog,
-                )
-            ):
-                return
-
-            if (
-                inputs == old_in
-                and outputs == old_out
-            ):
-
-                dialog.destroy()
-                return
-
-            self.checkpoint()
-
-            vi.connector_inputs = (
-                inputs
-            )
-
-            vi.connector_outputs = (
-                outputs
-            )
-
-            affected_by_graph: dict[
-                Graph,
-                set[int],
-            ] = {}
-
-            for (
-                parent_graph,
-                wire,
-            ) in affected:
-
-                affected_by_graph.setdefault(
-                    parent_graph,
-                    set(),
-                ).add(
-                    id(
-                        wire
-                    )
-                )
-
-            for (
-                parent_graph,
-                wire_ids,
-            ) in affected_by_graph.items():
-
-                parent_graph.wires = [
-                    wire
-                    for wire
-                    in parent_graph.wires
-                    if id(
-                        wire
-                    )
-                    not in wire_ids
-                ]
-
-            self.changed()
-
-            self.canvas.redraw()
-
-            dialog.destroy()
-
-        ttk.Button(
-            dialog,
-            text="Apply",
-            command=apply,
-        ).pack(
-            pady=8
-        )
-
-    # ============================================================
-    # VALIDATION
-    # ============================================================
-
-    def validate_current(
-        self,
-    ) -> None:
-
-        errors = (
-            self.runtime.validate(
-                self.graph,
-                self.project,
-                self.current_vi_id,
-            )
-        )
-
-        if errors:
-
-            for error in errors:
-
-                self.log(
-                    "VALIDATION "
-                    + error
-                )
-
-            self.status_var.set(
-                f"Validation failed: "
-                f"{len(errors)} error(s)"
-            )
-
-        else:
-
-            self.status_var.set(
-                "Validation successful"
-            )
-
-    # ============================================================
     # LOG
     # ============================================================
 
@@ -7248,17 +6490,26 @@ class StudioApp(tk.Tk):
         messagebox.showinfo(
             "PyLabView Studio Help",
             (
-                "Use the embedded Front Panel and Block Diagram tabs. "
-                "In Panel Edit mode, drag items or resize from the lower-right "
-                "handle; Operate mode changes controls.\n\n"
-                "Double-click a library item to add it. "
-                "Wire an output port to an input port. "
-                "Select a visual structure and use Open Structure "
-                "to edit its region.\n\n"
-                "F6 runs continuously. Stop performs a global stop, while "
-                "Stop Continuous stops the motor/measurement and keeps the camera live. "
-                "Select a node for Breakpoint "
-                "or a wire for Probe."
+                "Front Panel Navigation\n"
+                "• Ctrl + Mouse Wheel : Zoom In / Zoom Out\n"
+                "• Mouse Wheel : Scroll Vertical\n"
+                "• Shift + Mouse Wheel : Scroll Horizontal\n\n"
+
+                "Editing\n"
+                "• Ctrl + Z : Undo\n"
+                "• Ctrl + Y : Redo\n"
+                "• Drag item : Move item in Edit Mode\n"
+                "• Drag lower-right handle : Resize item\n\n"
+
+                "Operation\n"
+                "• Double-click numeric control : Input value manually\n"
+                "• Target RPM ▲ / ▼ : Increase / decrease 250 RPM\n"
+                "• Hold Target RPM ▲ / ▼ : Continuous increase / decrease\n\n"
+
+                "Toolbar\n"
+                "• Continuous : Start continuous operation\n"
+                "• Stop : Global stop\n"
+                "• Stop Bertahap : Stop motor gradually\n"
             ),
             parent=self,
         )

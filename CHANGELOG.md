@@ -2,6 +2,33 @@
 
 All notable user-facing changes to PyLabView Studio are recorded here.
 
+## [9.0.0] - 2026-11-11
+
+### Added
+
+- Added a Manual Target RPM spinner with 250 RPM steps, 1000–6000 RPM bounds, and hold-to-repeat operation.
+- Added persistent Oil and Wire chart renderers that retain static chart geometry and update only the live polyline.
+- Added change-aware Front Panel updates that skip a full redraw when only persistent runtime widgets changed.
+
+### Changed
+
+- Optimized live image rendering by fitting preview frames before PPM conversion and retaining Canvas image items across runtime refreshes.
+- Extended persistent rendering to measurement displays, camera/network status, tables, live pictures, and Oil/Wire charts.
+- Changed the runtime UI refresh interval to 100 ms to reduce UI/GDI work while retaining responsive telemetry presentation.
+- Stage sample display overrides can update snapshot data without forcing an immediate full Front Panel redraw.
+- Front Panel drag and resize now create one undo checkpoint only after an actual geometry change.
+- Simplified the primary toolbar around normal run and motor-stop operations and refreshed the in-app help text.
+
+### Compatibility
+
+- Application and Windows executable metadata are now version 9.0.0.
+- Project schema remains version 3; existing schema-v3 projects remain compatible and V1/v2 migration behavior is unchanged.
+
+### Validation
+
+- Full automated regression suite passes with 276 tests and 13 subtests.
+- Core and full optional-profile startup self-tests pass on Python 3.12.
+
 ## [8.0.0] - 2026-09-11
 
 ### Added
@@ -186,6 +213,7 @@ All notable user-facing changes to PyLabView Studio are recorded here.
 
 - Project schema remains version 3.
 
+[9.0.0]: https://github.com/yuwanch3/py-labView/releases/tag/v9.0.0
 [8.0.0]: https://github.com/yuwanch3/py-labView/releases/tag/v8.0.0
 [7.9.0]: https://github.com/yuwanch3/py-labView/releases/tag/v7.9.0
 [7.8.3]: https://github.com/yuwanch3/py-labView/releases/tag/v7.8.3

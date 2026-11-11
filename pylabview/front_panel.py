@@ -15,9 +15,14 @@ from .panel_widgets import gauge_fraction, image_to_ppm, next_dropdown_value, ta
 class PanelDesigner(tk.Canvas):
     """Free-layout Front Panel editor and lightweight operate surface."""
 
-    def __init__(self, master: tk.Misc, graph: Graph, panel: dict[str, Any],
+    def __init__(self,
+                 master: tk.Misc,
+                 graph: Graph,
+                 panel: dict[str, Any],
                  on_change: Callable[[], None] | None = None,
-                 on_value_change: Callable[[dict[str, Any]], None] | None = None) -> None:
+                 on_value_change: Callable[[dict[str, Any]], None] | None = None,
+                 before_change: Callable[[], None] | None = None,
+                 ) -> None:
         self.panel = _normalized_panel(panel, graph)
         canvas = self.panel["canvas"]
         super().__init__(master, background=canvas["background"], highlightthickness=0,
@@ -25,6 +30,7 @@ class PanelDesigner(tk.Canvas):
         self.graph = graph
         self.on_change = on_change or (lambda: None)
         self.on_value_change = on_value_change or (lambda _values: None)
+        self.before_change = before_change or (lambda: None)
         self.mode = "edit"
         self.zoom = 1.0
         self.grid_size = 10
@@ -61,6 +67,15 @@ class PanelDesigner(tk.Canvas):
             "time_display_2",
             "wifi",
             "wifi_ip",
+
+            "oil_px_display",
+            "oil_mm_display",
+            "wire_px_display",
+            "scale_display",
+            "omega_display",
+            "radius_display",
+            "ift_n_display",
+            "ift_mn_display",
         }
         self._persistent_fast_display_tags: dict[str, str] = {}
         self._persistent_fast_display_text_items: dict[str, int] = {}
@@ -68,8 +83,24 @@ class PanelDesigner(tk.Canvas):
         self._persistent_fast_display_values: dict[str, str] = {}
         self._persistent_fast_display_scaled = False
 
+        # ============================================================
+        # PERSISTENT CHART OPTIMIZATION
+        # ============================================================
+
+        self._persistent_chart_node_ids = {
+            "oil_chart",
+            "wire_chart",
+        }
+
+        self._persistent_chart_line_items: dict[str, int] = {}
+        self._persistent_chart_signatures: dict[str, tuple[Any, ...]] = {}
+        self._persistent_chart_scaled = False
+
         self._drag: tuple[str, float, float, dict[str, float], bool] | None = None
+        self._drag_snapshot_taken = False
         self._open_dropdown_id: str | None = None
+        self._rpm_spin_after_id: str | None = None
+        self._rpm_spin_direction = 0
         self.bind("<Button-1>", self._press)
         self.bind("<Double-1>", self._double_press)
         self.bind("<B1-Motion>", self._motion)
@@ -108,6 +139,11 @@ class PanelDesigner(tk.Canvas):
         self._persistent_fast_display_values.clear()
         self._persistent_fast_display_scaled = False
 
+        self.delete("persistent_chart")
+        self._persistent_chart_line_items.clear()
+        self._persistent_chart_signatures.clear()
+        self._persistent_chart_scaled = False
+
         self.graph = graph
         self.panel = _normalized_panel(panel, graph)
         self.selected_id = None
@@ -145,6 +181,11 @@ class PanelDesigner(tk.Canvas):
             self._persistent_fast_display_values.clear()
             self._persistent_fast_display_scaled = False
 
+            self.delete("persistent_chart")
+            self._persistent_chart_line_items.clear()
+            self._persistent_chart_signatures.clear()
+            self._persistent_chart_scaled = False
+
         self.redraw()
 
     def _initialize_values(self) -> None:
@@ -172,43 +213,90 @@ class PanelDesigner(tk.Canvas):
             return True
         return False
 
-    def update_values(self, values: dict[str, Any]) -> None:
+    def update_values(
+        self,
+        values: dict[str, Any],
+        *,
+        redraw: bool = True,
+    ) -> None:
+
+        missing = object()
+
+        previous_values = {
+            node_id: self.values.get(
+                node_id,
+                missing,
+            )
+            for node_id in values
+        }
+
         self.values.update(values)
 
         for item in self.panel["items"]:
             node_id = item["terminal_node_id"]
-            if item["kind"] == "chart" and node_id in values:
-                limit = int(self.graph.nodes[node_id].properties.get("history", 100))
-                self.chart_history[node_id] = update_chart_history(
-                    self.chart_history.get(node_id, []), values[node_id], limit)
+
+            if (
+                item["kind"] == "chart"
+                and node_id in values
+            ):
+                limit = int(
+                    self.graph.nodes[
+                        node_id
+                    ].properties.get(
+                        "history",
+                        100,
+                    )
+                )
+
+                self.chart_history[node_id] = (
+                    update_chart_history(
+                        self.chart_history.get(
+                            node_id,
+                            [],
+                        ),
+                        values[node_id],
+                        limit,
+                    )
+                )
 
         # Picture Oil is the high-frequency live camera indicator.
-        oil_picture = values.get("oil_picture")
+        oil_picture = values.get(
+            "oil_picture"
+        )
 
         if (
             self.mode == "operate"
-            and isinstance(oil_picture, ImageFrame)
+            and isinstance(
+                oil_picture,
+                ImageFrame,
+            )
         ):
             self._update_persistent_picture(
                 "oil_picture",
                 oil_picture,
             )
 
-        # Picture Comparison is normally frozen. Keep it persistent too,
-        # but rebuild its PhotoImage only when the ImageFrame object changes.
-        wire_picture = values.get("wire_picture")
+        # Picture Comparison normally remains frozen.
+        wire_picture = values.get(
+            "wire_picture"
+        )
 
         if (
             self.mode == "operate"
-            and isinstance(wire_picture, ImageFrame)
+            and isinstance(
+                wire_picture,
+                ImageFrame,
+            )
         ):
             wire_item = self._image_item_for_node(
                 "wire_picture"
             )
 
             if wire_item is not None:
-                previous_source = self._persistent_image_sources.get(
-                    wire_item["id"]
+                previous_source = (
+                    self._persistent_image_sources.get(
+                        wire_item["id"]
+                    )
                 )
 
                 if previous_source is not wire_picture:
@@ -223,9 +311,192 @@ class PanelDesigner(tk.Canvas):
         ):
             self._update_persistent_table(
                 "table_display",
-                self.values.get("table_display"),
+                self.values.get(
+                    "table_display"
+                ),
             )
 
+        if not redraw:
+            return
+
+        # ============================================================
+        # OPERATE-MODE LIGHTWEIGHT UPDATE
+        # ============================================================
+        #
+        # Persistent runtime widgets stay lightweight at every zoom.
+        #
+        # At zoom != 100%, persistent Canvas geometry has already been
+        # scaled by redraw(). Temporarily return only the affected
+        # persistent groups to document coordinates, update them, then
+        # scale them back. This avoids rebuilding the complete panel.
+        # ============================================================
+
+        if self.mode == "operate":
+
+            # --------------------------------------------------------
+            # TEMPORARILY RETURN PERSISTENT GEOMETRY TO DOCUMENT SPACE
+            # --------------------------------------------------------
+
+            if self.zoom != 1.0:
+
+                if self._persistent_fast_display_scaled:
+                    self.scale(
+                        "persistent_fast_display",
+                        0,
+                        0,
+                        1.0 / self.zoom,
+                        1.0 / self.zoom,
+                    )
+                    self._persistent_fast_display_scaled = False
+
+                if self._persistent_chart_scaled:
+                    self.scale(
+                        "persistent_chart",
+                        0,
+                        0,
+                        1.0 / self.zoom,
+                        1.0 / self.zoom,
+                    )
+                    self._persistent_chart_scaled = False
+
+            # --------------------------------------------------------
+            # UPDATE ONLY HIGH-FREQUENCY PERSISTENT ITEMS
+            # --------------------------------------------------------
+
+            for item in self.panel["items"]:
+
+                if self._is_persistent_chart_item(
+                    item
+                ):
+                    self._update_persistent_chart(
+                        item
+                    )
+
+                elif self._is_fast_display_item(
+                    item
+                ):
+                    self._update_persistent_fast_display(
+                        item
+                    )
+
+            # --------------------------------------------------------
+            # RESTORE CURRENT ZOOM
+            # --------------------------------------------------------
+
+            if self.zoom != 1.0:
+
+                if self.find_withtag(
+                    "persistent_fast_display"
+                ):
+                    self.scale(
+                        "persistent_fast_display",
+                        0,
+                        0,
+                        self.zoom,
+                        self.zoom,
+                    )
+                    self._persistent_fast_display_scaled = True
+
+                if self.find_withtag(
+                    "persistent_chart"
+                ):
+                    self.scale(
+                        "persistent_chart",
+                        0,
+                        0,
+                        self.zoom,
+                        self.zoom,
+                    )
+                    self._persistent_chart_scaled = True
+
+                # Table normally changes only after a completed capture
+                # batch. If it was rebuilt while zoomed, scale the new
+                # table once to the active zoom.
+                if (
+                    self.find_withtag(
+                        "persistent_table"
+                    )
+                    and not self._persistent_table_scaled
+                ):
+                    self.scale(
+                        "persistent_table",
+                        0,
+                        0,
+                        self.zoom,
+                        self.zoom,
+                    )
+                    self._persistent_table_scaled = True
+
+            persistent_node_ids = (
+                set(
+                    self._fast_display_node_ids
+                )
+                | set(
+                    self._persistent_chart_node_ids
+                )
+                | {
+                    "oil_picture",
+                    "wire_picture",
+                    "table_display",
+                }
+            )
+
+            front_panel_node_ids = {
+                item["terminal_node_id"]
+                for item in self.panel["items"]
+            }
+
+            nonpersistent_changed = False
+
+            for node_id in values:
+
+                if (
+                    node_id
+                    not in front_panel_node_ids
+                    or node_id
+                    in persistent_node_ids
+                ):
+                    continue
+
+                previous = previous_values.get(
+                    node_id,
+                    missing,
+                )
+
+                current = self.values.get(
+                    node_id,
+                    missing,
+                )
+
+                if previous is missing:
+                    nonpersistent_changed = True
+                    break
+
+                try:
+                    equal = (
+                        previous == current
+                    )
+
+                    if not isinstance(
+                        equal,
+                        bool,
+                    ):
+                        nonpersistent_changed = True
+                        break
+
+                    if not equal:
+                        nonpersistent_changed = True
+                        break
+
+                except Exception:
+                    nonpersistent_changed = True
+                    break
+
+            if not nonpersistent_changed:
+                return
+
+        # Edit Mode or a real non-persistent Front Panel value
+        # change keeps the original renderer.
         self.redraw()
 
     def _is_fast_display_item(
@@ -1842,28 +2113,130 @@ class PanelDesigner(tk.Canvas):
         tag = f"panel:{item['id']}"
 
         try:
-            image = tk.PhotoImage(
-                data=image_to_ppm(value),
-                format="PPM",
-            )
-
-            scale = max(
+            target_width = max(
                 1,
-                math.ceil(
-                    max(
-                        image.width()
-                        / max((w - 12) * self.zoom, 1),
-                        image.height()
-                        / max((h - 30) * self.zoom, 1),
-                    )
+                int(
+                    (w - 12)
+                    * self.zoom
                 ),
             )
 
-            if scale > 1:
-                image = image.subsample(
-                    scale,
-                    scale,
+            target_height = max(
+                1,
+                int(
+                    (h - 30)
+                    * self.zoom
+                ),
+            )
+
+            preview_frame = value
+
+            # ============================================================
+            # NORMAL ZOOM
+            # Keep the proven lightweight integer downsampling.
+            # ============================================================
+
+            if self.zoom <= 1.0:
+
+                scale = max(
+                    1,
+                    math.ceil(
+                        max(
+                            value.width
+                            / target_width,
+                            value.height
+                            / target_height,
+                        )
+                    ),
                 )
+
+                if scale > 1:
+
+                    preview_payload = value.payload[
+                        ::scale,
+                        ::scale,
+                    ]
+
+                    preview_height = int(
+                        preview_payload.shape[0]
+                    )
+
+                    preview_width = int(
+                        preview_payload.shape[1]
+                    )
+
+                    preview_frame = ImageFrame(
+                        payload=preview_payload,
+                        width=preview_width,
+                        height=preview_height,
+                        channels=value.channels,
+                        captured_at=value.captured_at,
+                        frame_sequence=value.frame_sequence,
+                    )
+
+            # ============================================================
+            # ZOOM IN
+            # Resize preview to match the enlarged Picture area.
+            # Original measurement frame is never modified.
+            # ============================================================
+
+            else:
+
+                fit_ratio = min(
+                    target_width
+                    / value.width,
+                    target_height
+                    / value.height,
+                    1.0,
+                )
+
+                preview_width = max(
+                    1,
+                    int(
+                        value.width
+                        * fit_ratio
+                    ),
+                )
+
+                preview_height = max(
+                    1,
+                    int(
+                        value.height
+                        * fit_ratio
+                    ),
+                )
+
+                if (
+                    preview_width != value.width
+                    or preview_height != value.height
+                ):
+
+                    import cv2
+
+                    preview_payload = cv2.resize(
+                        value.payload,
+                        (
+                            preview_width,
+                            preview_height,
+                        ),
+                        interpolation=cv2.INTER_AREA,
+                    )
+
+                    preview_frame = ImageFrame(
+                        payload=preview_payload,
+                        width=preview_width,
+                        height=preview_height,
+                        channels=value.channels,
+                        captured_at=value.captured_at,
+                        frame_sequence=value.frame_sequence,
+                    )
+
+            image = tk.PhotoImage(
+                data=image_to_ppm(
+                    preview_frame
+                ),
+                format="PPM",
+            )
 
             self._persistent_image_refs[item["id"]] = image
             self._persistent_image_sources[item["id"]] = value
@@ -1879,13 +2252,33 @@ class PanelDesigner(tk.Canvas):
                     image=image,
                     tags=("persistent_image", tag),
                 )
-                self._persistent_image_items[item["id"]] = canvas_image_id
-            else:
-                self.coords(
+
+                self._persistent_image_items[
+                    item["id"]
+                ] = canvas_image_id
+
+                # One-time position settle after Tk finishes the current
+                # layout/redraw cycle. This prevents the first camera frame
+                # from appearing offset before the next UI event.
+                settled_x = (
+                    x + w / 2
+                ) * self.zoom
+
+                settled_y = (
+                    y + h / 2 + 10
+                ) * self.zoom
+
+                self.after_idle(
+                    self.coords,
                     canvas_image_id,
-                    x + w / 2,
-                    y + h / 2 + 10,
+                    settled_x,
+                    settled_y,
                 )
+
+            else:
+                # Persistent image sudah berada pada posisi yang benar.
+                # Saat frame berubah, cukup ganti image-nya tanpa
+                # mengatur ulang koordinat Canvas.
                 self.itemconfigure(
                     canvas_image_id,
                     image=image,
@@ -2028,6 +2421,467 @@ class PanelDesigner(tk.Canvas):
 
         return True
 
+    def _is_persistent_chart_item(
+    self,
+    item: dict[str, Any],
+    ) -> bool:
+        """Return True only for the two high-frequency operate-mode charts."""
+
+        return (
+            self.mode == "operate"
+            and item["kind"] == "chart"
+            and item["terminal_node_id"]
+            in self._persistent_chart_node_ids
+        )
+
+    def _update_persistent_chart(
+        self,
+        item: dict[str, Any],
+    ) -> bool:
+        """
+        Draw Grafik Oil / Grafik Kawat persistently.
+
+        Static chart elements are created only when geometry/properties change.
+        Runtime refreshes update only the polyline coordinates.
+        """
+
+        if not self._is_persistent_chart_item(
+            item
+        ):
+            return False
+
+        item_id = item["id"]
+        node_id = item["terminal_node_id"]
+
+        bounds = item["bounds"]
+
+        x = bounds["x"]
+        y = bounds["y"]
+        w = bounds["width"]
+        h = bounds["height"]
+
+        plot_left = x + 38
+        plot_right = x + w - 10
+        plot_top = y + 28
+        plot_bottom = y + h - 34
+
+        x_min = float(
+            item["properties"].get(
+                "x_min",
+                0,
+            )
+        )
+
+        x_max = float(
+            item["properties"].get(
+                "x_max",
+                500,
+            )
+        )
+
+        y_min = float(
+            item["properties"].get(
+                "y_min",
+                0,
+            )
+        )
+
+        y_max = float(
+            item["properties"].get(
+                "y_max",
+                300,
+            )
+        )
+
+        if x_max <= x_min:
+            x_max = x_min + 1.0
+
+        if y_max <= y_min:
+            y_max = y_min + 1.0
+
+        x_label = item["properties"].get(
+            "x_label",
+            "Baris Pixel",
+        )
+
+        y_label = item["properties"].get(
+            "y_label",
+            "Intensitas (Threshold)",
+        )
+
+        # Signature menentukan apakah kerangka chart perlu dibuat ulang.
+        # Zoom ikut dimasukkan agar ukuran font tetap benar setelah zoom.
+        signature = (
+            x,
+            y,
+            w,
+            h,
+            x_min,
+            x_max,
+            y_min,
+            y_max,
+            str(x_label),
+            str(y_label),
+            self.zoom,
+        )
+
+        chart_tag = (
+            f"persistent_chart:{item_id}"
+        )
+
+        existing_signature = (
+            self._persistent_chart_signatures.get(
+                item_id
+            )
+        )
+
+        # ========================================================
+        # CREATE STATIC CHART ONLY WHEN NEEDED
+        # ========================================================
+
+        if existing_signature != signature:
+
+            self.delete(
+                chart_tag
+            )
+
+            self._persistent_chart_line_items.pop(
+                item_id,
+                None,
+            )
+
+            label = item["properties"].get(
+                "label",
+                item["kind"].replace("_", " ").title(),
+            )
+
+            # Outer chart container — same appearance as old renderer.
+            self.create_rectangle(
+                x,
+                y,
+                x + w,
+                y + h,
+                fill="#f7f7f7",
+                outline="#777",
+                width=1,
+                tags=(
+                    "persistent_chart",
+                    chart_tag,
+                ),
+            )
+
+            # Chart title — same appearance as old renderer.
+            self.create_text(
+                x + 8,
+                y + 10,
+                text=label,
+                anchor="w",
+                font=self._font(
+                    9,
+                    bold=True,
+                ),
+                tags=(
+                    "persistent_chart",
+                    chart_tag,
+                ),
+            )
+
+            tick_count = 5
+
+            # ----------------------------
+            # X-axis grid + tick labels
+            # ----------------------------
+
+            for index in range(
+                tick_count + 1
+            ):
+
+                fraction = (
+                    index / tick_count
+                )
+
+                grid_x = (
+                    plot_left
+                    + fraction
+                    * (
+                        plot_right
+                        - plot_left
+                    )
+                )
+
+                x_value = (
+                    x_min
+                    + fraction
+                    * (
+                        x_max
+                        - x_min
+                    )
+                )
+
+                self.create_line(
+                    grid_x,
+                    plot_top,
+                    grid_x,
+                    plot_bottom,
+                    fill="#d0d0d0",
+                    width=1,
+                    tags=(
+                        "persistent_chart",
+                        chart_tag,
+                    ),
+                )
+
+                self.create_text(
+                    grid_x,
+                    plot_bottom + 10,
+                    text=self._format(
+                        x_value
+                    ),
+                    anchor="n",
+                    font=self._font(
+                        7
+                    ),
+                    tags=(
+                        "persistent_chart",
+                        chart_tag,
+                    ),
+                )
+
+            # ----------------------------
+            # Y-axis grid + tick labels
+            # ----------------------------
+
+            for index in range(
+                tick_count + 1
+            ):
+
+                fraction = (
+                    index / tick_count
+                )
+
+                grid_y = (
+                    plot_bottom
+                    - fraction
+                    * (
+                        plot_bottom
+                        - plot_top
+                    )
+                )
+
+                y_value = (
+                    y_min
+                    + fraction
+                    * (
+                        y_max
+                        - y_min
+                    )
+                )
+
+                self.create_line(
+                    plot_left,
+                    grid_y,
+                    plot_right,
+                    grid_y,
+                    fill="#d0d0d0",
+                    width=1,
+                    tags=(
+                        "persistent_chart",
+                        chart_tag,
+                    ),
+                )
+
+                self.create_text(
+                    plot_left - 5,
+                    grid_y,
+                    text=self._format(
+                        y_value
+                    ),
+                    anchor="e",
+                    font=self._font(
+                        7
+                    ),
+                    tags=(
+                        "persistent_chart",
+                        chart_tag,
+                    ),
+                )
+
+            # ----------------------------
+            # Plot border
+            # ----------------------------
+
+            self.create_rectangle(
+                plot_left,
+                plot_top,
+                plot_right,
+                plot_bottom,
+                outline="#777777",
+                width=1,
+                tags=(
+                    "persistent_chart",
+                    chart_tag,
+                ),
+            )
+
+            # ----------------------------
+            # Persistent data line
+            # ----------------------------
+
+            line_item = self.create_line(
+                0,
+                0,
+                0,
+                0,
+                fill="#00866a",
+                width=2,
+                state="hidden",
+                tags=(
+                    "persistent_chart",
+                    chart_tag,
+                ),
+            )
+
+            self._persistent_chart_line_items[
+                item_id
+            ] = line_item
+
+            # ----------------------------
+            # Axis labels
+            # ----------------------------
+
+            self.create_text(
+                (
+                    plot_left
+                    + plot_right
+                )
+                / 2,
+                y + h - 4,
+                text=x_label,
+                anchor="s",
+                font=self._font(
+                    7
+                ),
+                tags=(
+                    "persistent_chart",
+                    chart_tag,
+                ),
+            )
+
+            self.create_text(
+                x + 8,
+                (
+                    plot_top
+                    + plot_bottom
+                )
+                / 2,
+                text=y_label,
+                anchor="w",
+                angle=90,
+                font=self._font(
+                    7
+                ),
+                tags=(
+                    "persistent_chart",
+                    chart_tag,
+                ),
+            )
+
+            self._persistent_chart_signatures[
+                item_id
+            ] = signature
+
+        # ========================================================
+        # UPDATE ONLY DATA LINE
+        # ========================================================
+
+        line_item = (
+            self._persistent_chart_line_items.get(
+                item_id
+            )
+        )
+
+        if line_item is None:
+            return True
+
+        numbers = self.chart_history.get(
+            node_id,
+            [],
+        )
+
+        if len(numbers) <= 1:
+
+            self.itemconfigure(
+                line_item,
+                state="hidden",
+            )
+
+            self.tag_raise(
+                "persistent_chart"
+            )
+
+            return True
+
+        low = min(
+            numbers
+        )
+
+        high = max(
+            numbers
+        )
+
+        span = (
+            high - low
+            or 1
+        )
+
+        points: list[float] = []
+
+        denominator = (
+            len(numbers) - 1
+        )
+
+        for index, number in enumerate(
+            numbers
+        ):
+
+            points.extend(
+                (
+                    plot_left
+                    + index
+                    * (
+                        plot_right
+                        - plot_left
+                    )
+                    / denominator,
+
+                    plot_bottom
+                    - (
+                        number - low
+                    )
+                    / span
+                    * (
+                        plot_bottom
+                        - plot_top
+                    ),
+                )
+            )
+
+        self.coords(
+            line_item,
+            *points,
+        )
+
+        self.itemconfigure(
+            line_item,
+            state="normal",
+        )
+
+        self.tag_raise(
+            line_item
+        )
+
+        return True
+
     def redraw(self) -> None:
         # Persistent table items survive redraw(). If the canvas is zoomed,
         # they were already scaled by the previous redraw. Restore them to
@@ -2063,6 +2917,23 @@ class PanelDesigner(tk.Canvas):
             )
             self._persistent_fast_display_scaled = False
 
+        # Persistent charts survive redraw().
+        # Return their Canvas coordinates to document space first
+        # before applying the current global zoom again.
+        if (
+            self.zoom != 1.0
+            and self._persistent_chart_scaled
+        ):
+            self.scale(
+                "persistent_chart",
+                0,
+                0,
+                1.0 / self.zoom,
+                1.0 / self.zoom,
+            )
+
+            self._persistent_chart_scaled = False
+
         # Keep persistent live image Canvas items alive. The five explicitly
         # selected fast-display widgets also survive normal Operate-mode
         # redraws. Everything else keeps the existing redraw behaviour.
@@ -2080,14 +2951,29 @@ class PanelDesigner(tk.Canvas):
             for y in range(0, height + 1, self.grid_size):
                 self.create_line(0, y, width, y, fill="#d3d3d3", tags="grid")
 
-        for item in sorted(self.panel["items"], key=lambda entry: entry["z_index"]):
-            if self._is_fast_display_item(
+        for item in sorted(
+            self.panel["items"],
+            key=lambda entry: entry["z_index"]
+        ):
+
+            if self._is_persistent_chart_item(
                 item
             ):
+
+                self._update_persistent_chart(
+                    item
+                )
+
+            elif self._is_fast_display_item(
+                item
+            ):
+
                 self._update_persistent_fast_display(
                     item
                 )
+
             else:
+
                 self._draw_item(
                     item
                 )
@@ -2100,6 +2986,9 @@ class PanelDesigner(tk.Canvas):
 
             if self.find_withtag("persistent_fast_display"):
                 self._persistent_fast_display_scaled = True
+
+            if self.find_withtag("persistent_chart"):
+                self._persistent_chart_scaled = True
 
         self.configure(
             scrollregion=(
@@ -2479,6 +3368,90 @@ class PanelDesigner(tk.Canvas):
                 font=self._font(10, family="TkFixedFont", bold=True),
                 tags=("panel_item", tag),
             )
+        elif (
+            kind == "numeric_control"
+            and node_id == "manual_target_rpm"
+        ):
+            text_fill = (
+                "#000000"
+                if enabled
+                else "#777777"
+            )
+
+            # Nilai RPM di bagian tengah.
+            self.create_text(
+                x + w / 2 - 10,
+                y + h / 2 + 10,
+                text=self._format(value),
+                fill=text_fill,
+                font=self._font(
+                    13,
+                    family="TkFixedFont",
+                    bold=True,
+                ),
+                tags=("panel_item", tag),
+            )
+
+            # Posisi area spinner di sisi kanan.
+            step_left = x + w - 32
+            step_right = x + w - 6
+            step_mid = y + h / 2 + 10
+
+            # Tombol atas.
+            self.create_rectangle(
+                step_left,
+                y + 24,
+                step_right,
+                step_mid,
+                fill=(
+                    "#eeeeee"
+                    if enabled
+                    else "#d9d9d9"
+                ),
+                outline="#777",
+                tags=("panel_item", tag),
+            )
+
+            # Tombol bawah.
+            self.create_rectangle(
+                step_left,
+                step_mid,
+                step_right,
+                y + h - 6,
+                fill=(
+                    "#eeeeee"
+                    if enabled
+                    else "#d9d9d9"
+                ),
+                outline="#777",
+                tags=("panel_item", tag),
+            )
+
+            # Icon panah atas.
+            self.create_text(
+                (step_left + step_right) / 2,
+                (y + 24 + step_mid) / 2,
+                text="▲",
+                fill=text_fill,
+                font=self._font(
+                    9,
+                    bold=True,
+                ),
+                tags=("panel_item", tag),
+            )
+
+            # Icon panah bawah.
+            self.create_text(
+                (step_left + step_right) / 2,
+                (step_mid + y + h - 6) / 2,
+                text="▼",
+                fill=text_fill,
+                font=self._font(
+                    9,
+                    bold=True,
+                ),
+                tags=("panel_item", tag),
+            )
         else:
             text_fill = "#000000" if enabled else "#777777"
             self.create_text(x + w / 2, y + h / 2 + 10, text=self._format(value),
@@ -2657,6 +3630,89 @@ class PanelDesigner(tk.Canvas):
                 self.redraw()
                 return
 
+            if (
+                node_id == "manual_target_rpm"
+                and item["kind"] == "numeric_control"
+            ):
+                bounds = item["bounds"]
+
+                step_left = (
+                    bounds["x"]
+                    + bounds["width"]
+                    - 32
+                )
+
+                step_right = (
+                    bounds["x"]
+                    + bounds["width"]
+                    - 6
+                )
+
+                step_mid = (
+                    bounds["y"]
+                    + bounds["height"] / 2
+                    + 10
+                )
+
+                step_top = bounds["y"] + 24
+                step_bottom = (
+                    bounds["y"]
+                    + bounds["height"]
+                    - 6
+                )
+
+                if (
+                    step_left <= x <= step_right
+                    and step_top <= y <= step_bottom
+                ):
+                    try:
+                        current = float(
+                            self.values.get(
+                                node_id,
+                                1000.0,
+                            )
+                        )
+                    except (
+                        TypeError,
+                        ValueError,
+                    ):
+                        current = 1000.0
+
+                    if y < step_mid:
+                        value = min(
+                            6000.0,
+                            current + 250.0,
+                        )
+                        self._rpm_spin_direction = 1
+                    else:
+                        value = max(
+                            1000.0,
+                            current - 250.0,
+                        )
+                        self._rpm_spin_direction = -1
+
+                    self.values[node_id] = value
+                    self.redraw()
+
+                    self.on_value_change(
+                        self.control_values()
+                    )
+
+                    # Mulai auto-repeat jika tombol tetap ditahan.
+                    # Delay awal dibuat agak lama supaya klik biasa
+                    # tetap terasa seperti satu klik normal.
+                    if self._rpm_spin_after_id is not None:
+                        self.after_cancel(
+                            self._rpm_spin_after_id
+                        )
+
+                    self._rpm_spin_after_id = self.after(
+                        500,
+                        self._repeat_manual_rpm_step,
+                    )
+
+                    return
+
             if item["kind"] == "boolean_control":
                 if item["properties"].get("display_type") == "radio_start_stop":
                     midpoint = item["bounds"]["x"] + item["bounds"]["width"] / 2
@@ -2670,28 +3726,229 @@ class PanelDesigner(tk.Canvas):
                 self.redraw()
             return
         self.selected_id = item["id"]
-        self._drag = (item["id"], x, y, dict(item["bounds"]), resize)
+
+        self._drag = (
+            item["id"],
+            x,
+            y,
+            dict(item["bounds"]),
+            resize,
+        )
+
+        self._drag_snapshot_taken = False
+
         self.redraw()
 
-    def _motion(self, event: tk.Event) -> None:
-        if not self._drag or self.mode != "edit": return
-        item_id, start_x, start_y, original, resize = self._drag
-        item = next(entry for entry in self.panel["items"] if entry["id"] == item_id)
-        x, y = self._document_point(event)
-        snap = lambda value: round(value / self.grid_size) * self.grid_size
+    def _motion(
+        self,
+        event: tk.Event,
+    ) -> None:
+
+        if (
+            not self._drag
+            or self.mode != "edit"
+        ):
+            return
+
+        (
+            item_id,
+            start_x,
+            start_y,
+            original,
+            resize,
+        ) = self._drag
+
+        item = next(
+            entry
+            for entry in self.panel["items"]
+            if entry["id"] == item_id
+        )
+
+        x, y = self._document_point(
+            event
+        )
+
+        snap = lambda value: (
+            round(
+                value / self.grid_size
+            )
+            * self.grid_size
+        )
+
         if resize:
-            item["bounds"]["width"] = max(40, snap(original["width"] + x - start_x))
-            item["bounds"]["height"] = max(30, snap(original["height"] + y - start_y))
+
+            new_width = max(
+                40,
+                snap(
+                    original["width"]
+                    + x
+                    - start_x
+                ),
+            )
+
+            new_height = max(
+                30,
+                snap(
+                    original["height"]
+                    + y
+                    - start_y
+                ),
+            )
+
+            changed = (
+                new_width
+                != item["bounds"]["width"]
+                or new_height
+                != item["bounds"]["height"]
+            )
+
+            if (
+                changed
+                and not self._drag_snapshot_taken
+            ):
+                self.before_change()
+                self._drag_snapshot_taken = True
+
+            item["bounds"]["width"] = new_width
+            item["bounds"]["height"] = new_height
+
         else:
-            item["bounds"]["x"] = max(0, snap(original["x"] + x - start_x))
-            item["bounds"]["y"] = max(0, snap(original["y"] + y - start_y))
+
+            new_x = max(
+                0,
+                snap(
+                    original["x"]
+                    + x
+                    - start_x
+                ),
+            )
+
+            new_y = max(
+                0,
+                snap(
+                    original["y"]
+                    + y
+                    - start_y
+                ),
+            )
+
+            changed = (
+                new_x
+                != item["bounds"]["x"]
+                or new_y
+                != item["bounds"]["y"]
+            )
+
+            if (
+                changed
+                and not self._drag_snapshot_taken
+            ):
+                self.before_change()
+                self._drag_snapshot_taken = True
+
+            item["bounds"]["x"] = new_x
+            item["bounds"]["y"] = new_y
+
         self.redraw()
 
     def _double_press(self, event: tk.Event) -> None:
-        if self.mode != "operate": return
-        item, _resize = self._item_at(*self._document_point(event))
-        if not item or not item["kind"].endswith("control") or item["kind"] == "boolean_control": return
+        if self.mode != "operate":
+            return
+
+        x, y = self._document_point(event)
+
+        item, _resize = self._item_at(
+            x,
+            y,
+        )
+
+        if (
+            not item
+            or not item["kind"].endswith("control")
+            or item["kind"] == "boolean_control"
+        ):
+            return
+
         node_id = item["terminal_node_id"]
+
+        # ============================================================
+        # MANUAL RPM SPINNER
+        # Double-click cepat pada tombol ▲ / ▼ tidak boleh membuka
+        # dialog input manual. Dialog hanya boleh terbuka jika operator
+        # double-click pada area utama Target RPM.
+        # ============================================================
+
+        if (
+            node_id == "manual_target_rpm"
+            and item["kind"] == "numeric_control"
+        ):
+            bounds = item["bounds"]
+
+            step_left = (
+                bounds["x"]
+                + bounds["width"]
+                - 32
+            )
+
+            step_right = (
+                bounds["x"]
+                + bounds["width"]
+                - 6
+            )
+
+            step_top = (
+                bounds["y"]
+                + 24
+            )
+
+            step_bottom = (
+                bounds["y"]
+                + bounds["height"]
+                - 6
+            )
+
+            if (
+                step_left <= x <= step_right
+                and step_top <= y <= step_bottom
+            ):
+                try:
+                    current = float(
+                        self.values.get(
+                            node_id,
+                            1000.0,
+                        )
+                    )
+                except (
+                    TypeError,
+                    ValueError,
+                ):
+                    current = 1000.0
+
+                step_mid = (
+                    bounds["y"]
+                    + bounds["height"] / 2
+                    + 10
+                )
+
+                if y < step_mid:
+                    value = min(
+                        6000.0,
+                        current + 250.0,
+                    )
+                else:
+                    value = max(
+                        1000.0,
+                        current - 250.0,
+                    )
+
+                self.values[node_id] = value
+
+                self.redraw()
+
+                self.on_value_change(
+                    self.control_values()
+                )
+                return
         enabled, read_only = self._control_state(node_id)
 
         if not enabled or read_only:
@@ -2710,14 +3967,95 @@ class PanelDesigner(tk.Canvas):
             return
         if item["kind"] == "array_control" and not isinstance(value, list):
             return
+
+        # Manual Target RPM hanya boleh 1000–6000 RPM.
+        # Jika operator memasukkan nilai di luar batas,
+        # kembalikan ke default 1000 RPM.
+        if (
+            node_id == "manual_target_rpm"
+            and (
+                not isinstance(value, (int, float))
+                or value < 1000
+                or value > 6000
+            )
+        ):
+            value = 1000.0
+
         self.values[node_id] = value
         self.redraw()
         self.on_value_change(self.control_values())
 
-    def _release(self, _event: tk.Event) -> None:
+    def _repeat_manual_rpm_step(
+        self,
+    ) -> None:
+
+        if self._rpm_spin_direction == 0:
+            self._rpm_spin_after_id = None
+            return
+
+        try:
+            current = float(
+                self.values.get(
+                    "manual_target_rpm",
+                    1000.0,
+                )
+            )
+        except (
+            TypeError,
+            ValueError,
+        ):
+            current = 1000.0
+
+        if self._rpm_spin_direction > 0:
+            value = min(
+                6000.0,
+                current + 250.0,
+            )
+        else:
+            value = max(
+                1000.0,
+                current - 250.0,
+            )
+
+        self.values[
+            "manual_target_rpm"
+        ] = value
+
+        self.redraw()
+
+        self.on_value_change(
+            self.control_values()
+        )
+
+        # Selama mouse masih ditahan,
+        # ulangi setiap 150 ms.
+        self._rpm_spin_after_id = self.after(
+            150,
+            self._repeat_manual_rpm_step,
+        )
+
+    def _release(
+        self,
+        _event: tk.Event,
+    ) -> None:
+
+        # Stop auto-repeat spinner saat mouse dilepas.
+        self._rpm_spin_direction = 0
+
+        if self._rpm_spin_after_id is not None:
+            self.after_cancel(
+                self._rpm_spin_after_id
+            )
+            self._rpm_spin_after_id = None
+
         if self._drag:
+
             self._drag = None
-            self.on_change()
+
+            if self._drag_snapshot_taken:
+                self.on_change()
+
+            self._drag_snapshot_taken = False
 
     def _document_point(self, event: tk.Event) -> tuple[float, float]:
         return self.canvasx(event.x) / self.zoom, self.canvasy(event.y) / self.zoom
@@ -2760,6 +4098,11 @@ class PanelDesigner(tk.Canvas):
             self._persistent_fast_display_bar_items.clear()
             self._persistent_fast_display_values.clear()
             self._persistent_fast_display_scaled = False
+
+            self.delete("persistent_chart")
+            self._persistent_chart_line_items.clear()
+            self._persistent_chart_signatures.clear()
+            self._persistent_chart_scaled = False
 
         self.redraw()
 

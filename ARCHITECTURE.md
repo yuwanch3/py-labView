@@ -1,4 +1,4 @@
-# Arsitektur PyLabView Studio 8.0.0
+# Arsitektur PyLabView Studio 9.0.0
 
 ## Boundaries
 
@@ -6,7 +6,7 @@
 
 - `execution.py`, `resources.py`, `runtime.py`: desktop CPython dataflow scheduler, cooperative cancellation, and session-owned handles. `DataflowRuntime` honors an explicitly supplied `data_root`; otherwise its writable runtime root defaults to the user data directory provided by `paths.py`, rather than the process working directory.
 
-- `paths.py`: resolves bundled application resources separately from writable user data. In source mode, bundled resources resolve from the project root; in frozen mode they resolve from the PyInstaller bundle root. Writable application data is stored beneath `Documents\GMJ PyLabView`. Release 8.0.0 creates the top-level `Examples`, `Projects`, and `Sessions` directories. Legacy top-level `Captures` and `Measurement Exports` are no longer created by the spinning-drop workflow.
+- `paths.py`: resolves bundled application resources separately from writable user data. In source mode, bundled resources resolve from the project root; in frozen mode they resolve from the PyInstaller bundle root. Writable application data is stored beneath `Documents\GMJ PyLabView`. Release 9.0.0 creates the top-level `Examples`, `Projects`, and `Sessions` directories. Legacy top-level `Captures` and `Measurement Exports` are no longer created by the spinning-drop workflow.
 
 - `startup_screen.py`, `app.py`: startup presentation and operating-mode selection. The user selects Standard Mode or Manual RPM Mode before the corresponding bundled project is loaded. Startup logo and example-project lookup use bundled resource helpers so the same path model works in source and frozen builds.
 
@@ -30,7 +30,7 @@
 
 - For each accepted stage/Manual target, 10 raw stage images are captured at the existing sample interval. Each sample is paired with an Analysis request containing the corresponding display/analysis state. Analysis snapshots are stored separately from raw stage images.
 
-- `front_panel.py`: Tk presentation plus the off-screen Analysis renderer. `freeze_analysis_snapshot()` copies only the values/chart data needed by the Analysis image. Rendering uses that frozen data rather than reading later live UI state.
+- `front_panel.py`: Tk presentation plus the off-screen Analysis renderer. In Operate Mode, live images, Oil/Wire charts, measurement tables, and high-frequency indicators use persistent Canvas items. Runtime updates modify only changed image/text/polyline state; a full redraw is reserved for non-persistent changes. Image previews are fitted before PPM conversion, avoiding unnecessary full-resolution Tk image work. `freeze_analysis_snapshot()` copies only the values/chart data needed by the Analysis image. Rendering uses that frozen data rather than reading later live UI state.
 
 - `protocols.py`: bounded stdlib TCP/UDP and Modbus TCP FC01/02/03/04/05/06/15/16; pyserial loader remains compatibility API.
 
@@ -40,7 +40,7 @@
 
 - `targets.py`: bounded external target manifest/handshake. A response is reported honestly and never upgrades desktop execution into hard RT.
 
-- `front_panel.py`, `canvas_editor.py`, `app.py`: Tk presentation. Front Panel and Block Diagram canvases expose visual vertical scrollbars while retaining their existing mouse-wheel and zoom behavior. Runtime workers never call Tk directly.
+- `front_panel.py`, `canvas_editor.py`, `app.py`: Tk presentation. Front Panel and Block Diagram canvases expose visual vertical scrollbars while retaining their existing mouse-wheel and zoom behavior. Manual Target RPM has a bounded 250-RPM spinner with hold-to-repeat behavior. Front Panel drag/resize takes one undo checkpoint only after an actual geometry change. Runtime workers never call Tk directly.
 
 - `app.py` owns application-level run/stop presentation behavior, session-based measurement export, and mode-aware UI integration. Stop Continuous stops the measurement/motor run while preserving the intended live-camera workflow; Global Stop, including the bottom front-panel STOP control, stops the active motor/controller/runtime path consistently in Standard and Manual modes.
 
@@ -74,7 +74,7 @@ Built-in definitions must have an explicit registered handler. A type absent fro
 
 ## Persistence
 
-Application release 8.0.0 deliberately keeps project schema version 3. New behavior is represented by existing schema-v3 nodes, handlers, properties, session infrastructure, and application-level UI/export behavior, so no schema migration is required.
+Application release 9.0.0 deliberately keeps project schema version 3. New behavior is represented by existing schema-v3 nodes, handlers, properties, session infrastructure, and application-level UI/export behavior, so no schema migration is required.
 
 V1/v2 projects continue to migrate to schema v3, and existing schema-v3 projects remain the persisted project format.
 
