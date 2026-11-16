@@ -1,4 +1,4 @@
-# PyLabView Studio 9.0.0
+# PyLabView Studio 9.5.0
 
 PyLabView Studio adalah aplikasi desktop visual dataflow independen untuk Python 3.10+ dan `tkinter`. Aplikasi mempertahankan core dataflow dan schema proyek v3, serta menyediakan integrasi instrumentation, vision, serial communication, dan workflow spinning-drop interfacial tension (IFT).
 
@@ -6,7 +6,7 @@ Proyek ini tidak berafiliasi dengan National Instruments; LabVIEW adalah merek d
 
 ## Spinning-Drop IFT
 
-PyLabView Studio 9.0.0 menyediakan workflow spinning-drop IFT dengan dua mode operasi:
+PyLabView Studio 9.5.0 menyediakan workflow spinning-drop IFT dengan dua mode operasi:
 
 - **Standard Mode**: menjalankan sequence RPM 1000 → 2000 → 3000 → 4000 → 5000 → 6000 RPM dengan kontrol PID pada Arduino dan stage otomatis.
 - **Manual RPM Mode**: operator menentukan target RPM hingga 6000 RPM, sedangkan PWM tetap dikendalikan otomatis oleh PID.
@@ -57,7 +57,7 @@ Folder RPM dibuat on-demand saat capture dilakukan.
 
 Default example project tersedia untuk Standard Mode dan Manual RPM Mode. Bundled examples adalah master startup project; user-copy di `Documents\GMJ PyLabView\Examples` disinkronkan dari bundled release examples.
 
-Legacy top-level `Captures`, `Measurement Exports`, dan `spinning-drop-ift.csv` tidak lagi digunakan oleh workflow spinning-drop release 9.0.0.
+Legacy top-level `Captures`, `Measurement Exports`, dan `spinning-drop-ift.csv` tidak lagi digunakan oleh workflow spinning-drop release 9.5.0.
 
 ## Instrumentation
 
@@ -108,7 +108,7 @@ Windows build tidak membundel driver vendor NI/VISA.
 
 ## Compatibility
 
-App version adalah **9.0.0**.
+App version adalah **9.5.0**.
 
 Format persisted tetap `pylabview-project` schema version 3. Perubahan versi aplikasi tidak mengubah schema project.
 

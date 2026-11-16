@@ -2,6 +2,39 @@
 
 All notable user-facing changes to PyLabView Studio are recorded here.
 
+## [9.5.0] - 2026-11-16
+
+### Added
+
+- Added Oil Edge droplet detection (`droplet` mode) with centered-contour isolation, border/large-tube rejection, extent filtering, and normalized distance-from-center scoring. Falls back to proven `scanline` legacy when no convincing droplet is found.
+- Added `tracking_hint` temporal tracking parameter across `edge_intensity_profile` / `VisionAdapter.edge_detection` so center/diameter persist smoothly across frames.
+- Added `fit_to_view()` Front Panel startup behavior that fits content width to viewport (with 0.985× margin), applied only once at launch.
+- Added Manual RPM safety interlock: `manual_target_rpm` control is disabled while motor is running/START, preventing accidental target change during operation.
+- Added 100 ms runtime UI refresh interval (from 60 ms in v9.5.0) to reduce GDI/Front Panel work while retaining responsive telemetry presentation.
+- Added `_auto_fit_active` flag to suppress redraw during initial `fit_to_view` settle.
+- Added `_on_configure` canvas hook that auto-fits on first Configure event rather than immediate full redraw.
+
+### Changed
+
+- Optimized live image rendering by fitting preview frames before PPM conversion and retaining Canvas image items across runtime refreshes.
+- Extended persistent rendering to measurement displays, camera/network status, tables, live pictures, Oil/Wire charts, and Manual RPM spinner.
+- Changed the runtime UI refresh interval from 60 ms to 100 ms to reduce UI/GDI work while retaining responsive telemetry presentation.
+- Stage sample display overrides can update snapshot data without forcing an immediate full Front Panel redraw.
+- Front Panel drag and resize now create one undo checkpoint only after an actual geometry change.
+- Simplified the primary toolbar around normal run and motor-stop operations and refreshed the in-app help text.
+- Manual Target RPM spinner remains active only when motor is stopped; when START is pressed the control becomes disabled.
+
+### Compatibility
+
+- Application and Windows executable metadata are now version 9.5.0.
+- Project schema remains version 3; existing schema-v3 projects remain compatible and V1/v2 migration behavior is unchanged.
+- Oil Edge droplet detection falls back to legacy scanline when no centered droplet is found, ensuring backward compatibility with existing projects.
+
+### Fixed
+
+- Prevented Manual Target RPM from being edited while motor is running (safety interlock).
+- Drop-down and spinner state now correctly respects motor RUNNABLE/STOP status.
+
 ## [9.0.0] - 2026-11-11
 
 ### Added
@@ -21,7 +54,7 @@ All notable user-facing changes to PyLabView Studio are recorded here.
 
 ### Compatibility
 
-- Application and Windows executable metadata are now version 9.0.0.
+- Application and Windows executable metadata are now version 9.5.0.
 - Project schema remains version 3; existing schema-v3 projects remain compatible and V1/v2 migration behavior is unchanged.
 
 ### Validation
@@ -213,7 +246,7 @@ All notable user-facing changes to PyLabView Studio are recorded here.
 
 - Project schema remains version 3.
 
-[9.0.0]: https://github.com/yuwanch3/py-labView/releases/tag/v9.0.0
+[9.5.0]: https://github.com/yuwanch3/py-labView/releases/tag/v9.5.0
 [8.0.0]: https://github.com/yuwanch3/py-labView/releases/tag/v8.0.0
 [7.9.0]: https://github.com/yuwanch3/py-labView/releases/tag/v7.9.0
 [7.8.3]: https://github.com/yuwanch3/py-labView/releases/tag/v7.8.3
