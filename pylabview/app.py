@@ -719,6 +719,12 @@ class StudioApp(tk.Tk):
             # Layout convenience must never prevent normal application use.
             return
 
+        if self.front_panel is not None:
+            self.after(
+                60,
+                self.front_panel.fit_to_view,
+            )
+
         self.status_var.set(
             "Workspace side and bottom panels collapsed"
         )

@@ -1541,6 +1541,26 @@ def edge_intensity_profile(
         )
     )
 
+    # Oil Edge gets the enhanced centered-droplet detector.
+    # Wire Edge deliberately stays on the proven legacy scanline path.
+    node_label = str(
+        getattr(
+            context.node,
+            "label",
+            "",
+        )
+        or ""
+    ).strip().lower()
+
+    detection_mode = (
+        "droplet"
+        if (
+            context.node.id == "oil_edge"
+            or node_label.startswith("oil edge")
+        )
+        else "scanline"
+    )
+
     # ImageFrame itself stays identical for a held reference snapshot.
     #
     # Oil live camera receives a new ImageFrame object every iteration,
@@ -1560,7 +1580,9 @@ def edge_intensity_profile(
             "orientation": None,
             "threshold": None,
             "foreground": None,
+            "detection_mode": None,
             "result": None,
+            "tracking_hint": None,
         },
     )
 
@@ -1578,6 +1600,8 @@ def edge_intensity_profile(
         == threshold
         and state["foreground"]
         == foreground
+        and state["detection_mode"]
+        == detection_mode
     ):
 
         return state[
@@ -1590,10 +1614,42 @@ def edge_intensity_profile(
             orientation,
             threshold,
             foreground,
+            detection_mode,
+            (
+                state.get("tracking_hint")
+                if detection_mode == "droplet"
+                else None
+            ),
         )
     )
 
     context.session.token.check()
+
+    if detection_mode == "droplet":
+        center_x = result.get(
+            "_droplet_center_x"
+        )
+        center_y = result.get(
+            "_droplet_center_y"
+        )
+        diameter_px = result.get(
+            "diameter_px"
+        )
+
+        if (
+            isinstance(center_x, (int, float))
+            and isinstance(center_y, (int, float))
+            and isinstance(diameter_px, (int, float))
+            and math.isfinite(float(center_x))
+            and math.isfinite(float(center_y))
+            and math.isfinite(float(diameter_px))
+            and float(diameter_px) > 0
+        ):
+            state["tracking_hint"] = {
+                "center_x": float(center_x),
+                "center_y": float(center_y),
+                "diameter_px": float(diameter_px),
+            }
 
     state[
         "image_id"
@@ -1610,6 +1666,10 @@ def edge_intensity_profile(
     state[
         "foreground"
     ] = foreground
+
+    state[
+        "detection_mode"
+    ] = detection_mode
 
     state[
         "result"

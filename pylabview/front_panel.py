@@ -33,6 +33,7 @@ class PanelDesigner(tk.Canvas):
         self.before_change = before_change or (lambda: None)
         self.mode = "edit"
         self.zoom = 1.0
+        self._auto_fit_active = False
         self.grid_size = 10
         self.selected_id: str | None = None
         self.values: dict[str, Any] = {}
@@ -114,7 +115,7 @@ class PanelDesigner(tk.Canvas):
         self.bind("<MouseWheel>", self._vertical_wheel)
         self.bind("<Button-4>", lambda _event: self._scroll_vertical(-1))
         self.bind("<Button-5>", lambda _event: self._scroll_vertical(1))
-        self.bind("<Configure>", lambda _event: self.redraw())
+        self.bind("<Configure>", self._on_configure)
         self._initialize_values()
         self.redraw()
 
@@ -3484,6 +3485,17 @@ class PanelDesigner(tk.Canvas):
 
         mode = self._density_mode()
 
+        # ============================================================
+        # MANUAL RPM SAFETY INTERLOCK
+        # Target RPM hanya boleh diedit saat motor STOP.
+        # Ketika motor START / running, kontrol dibuat disabled.
+        # ============================================================
+        if (
+            node_id == "manual_target_rpm"
+            and bool(self.values.get("motor", False))
+        ):
+            return False, False
+
         if node_id in density_detail_nodes and mode == "Manual Δρ":
             return False, False
 
@@ -3871,6 +3883,13 @@ class PanelDesigner(tk.Canvas):
 
         node_id = item["terminal_node_id"]
 
+        enabled, read_only = self._control_state(node_id)
+
+        if not enabled or read_only:
+            self._open_dropdown_id = None
+            self.redraw()
+            return
+
         # ============================================================
         # MANUAL RPM SPINNER
         # Double-click cepat pada tombol ▲ / ▼ tidak boleh membuka
@@ -3949,12 +3968,6 @@ class PanelDesigner(tk.Canvas):
                     self.control_values()
                 )
                 return
-        enabled, read_only = self._control_state(node_id)
-
-        if not enabled or read_only:
-            self._open_dropdown_id = None
-            self.redraw()
-            return
 
         self._open_dropdown_id = None
         raw = simpledialog.askstring("Control Value", "Value:", initialvalue=self._format(self.values.get(node_id, "")), parent=self)
@@ -3990,6 +4003,15 @@ class PanelDesigner(tk.Canvas):
     ) -> None:
 
         if self._rpm_spin_direction == 0:
+            self._rpm_spin_after_id = None
+            return
+
+        enabled, read_only = self._control_state(
+            "manual_target_rpm"
+        )
+
+        if not enabled or read_only:
+            self._rpm_spin_direction = 0
             self._rpm_spin_after_id = None
             return
 
@@ -4065,6 +4087,8 @@ class PanelDesigner(tk.Canvas):
         return "break"
 
     def _set_zoom(self, factor: float, x: int, y: int) -> str:
+
+        self._auto_fit_active = False
         old_zoom = self.zoom
         document_x = self.canvasx(x) / old_zoom
         document_y = self.canvasy(y) / old_zoom
@@ -4111,6 +4135,91 @@ class PanelDesigner(tk.Canvas):
         self.xview_moveto(max(0.0, (document_x * self.zoom - x) / width))
         self.yview_moveto(max(0.0, (document_y * self.zoom - y) / height))
         return "break"
+
+    def fit_to_view(self) -> None:
+        """Fit lebar isi Front Panel ke workspace saat startup."""
+
+        self._auto_fit_active = True
+        self.update_idletasks()
+
+        viewport_width = max(
+            float(self.winfo_width()) - 12.0,
+            1.0,
+        )
+
+        items = self.panel.get(
+            "items",
+            [],
+        )
+
+        if items:
+            content_width = max(
+                float(item["bounds"]["x"])
+                + float(item["bounds"]["width"])
+                for item in items
+            )
+        else:
+            content_width = float(
+                self.panel["canvas"]["width"]
+            )
+
+        content_width = max(
+            content_width,
+            1.0,
+        )
+
+        # Fit berdasarkan LEBAR KONTEN, bukan ukuran canvas keseluruhan.
+        # Sedikit margin supaya batas kanan/kiri tetap terlihat.
+        fit_zoom = (
+            viewport_width
+            / content_width
+        ) * 0.985
+
+        # Jangan memperbesar melebihi ukuran asli.
+        # Zoom-out manual setelah startup tetap bebas seperti sebelumnya.
+        fit_zoom = min(
+            1.1,
+            max(
+                0.35,
+                fit_zoom,
+            ),
+        )
+
+        if fit_zoom != self.zoom:
+            self.zoom = fit_zoom
+
+            self.delete("persistent_image")
+            self._persistent_image_refs.clear()
+            self._persistent_image_items.clear()
+            self._persistent_image_sources.clear()
+
+            self.delete("persistent_table")
+            self._persistent_table_signatures.clear()
+            self._persistent_table_scaled = False
+
+            self.delete("persistent_fast_display")
+            self._persistent_fast_display_tags.clear()
+            self._persistent_fast_display_text_items.clear()
+            self._persistent_fast_display_bar_items.clear()
+            self._persistent_fast_display_values.clear()
+            self._persistent_fast_display_scaled = False
+
+            self.delete("persistent_chart")
+            self._persistent_chart_line_items.clear()
+            self._persistent_chart_signatures.clear()
+            self._persistent_chart_scaled = False
+
+        self.redraw()
+
+        # Startup dimulai dari pojok kiri atas.
+        self.xview_moveto(0.0)
+        self.yview_moveto(0.0)
+
+    def _on_configure(self, _event: tk.Event) -> None:
+        if self._auto_fit_active:
+            self.after_idle(self.fit_to_view)
+        else:
+            self.redraw()
 
     def _horizontal_wheel(self, event: tk.Event) -> str:
         return self._scroll_horizontal(-1 if event.delta > 0 else 1)

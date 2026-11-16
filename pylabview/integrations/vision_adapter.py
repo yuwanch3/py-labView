@@ -937,6 +937,8 @@ class VisionAdapter:
         orientation: str,
         threshold: float = 127,
         foreground: str = "dark",
+        detection_mode: str = "scanline",
+        tracking_hint: dict[str, float] | None = None,
     ) -> dict[str, Any]:
 
         frame = self._require_frame(
@@ -1017,6 +1019,27 @@ class VisionAdapter:
             raise ValueError(
                 "edge foreground must be "
                 "'dark' or 'light'"
+            )
+
+        # --------------------------------------------------------
+        # Validate detection mode
+        #
+        # scanline = proven legacy behaviour (used by Wire Edge).
+        # droplet  = Oil Edge enhancement; falls back to scanline
+        #            when no convincing centered droplet is found.
+        # --------------------------------------------------------
+
+        detection_mode = str(
+            detection_mode
+        ).strip().lower()
+
+        if detection_mode not in (
+            "scanline",
+            "droplet",
+        ):
+            raise ValueError(
+                "edge detection mode must be "
+                "'scanline' or 'droplet'"
             )
 
         # --------------------------------------------------------
@@ -1394,27 +1417,332 @@ class VisionAdapter:
                 profile = []
 
         # --------------------------------------------------------
-        # Tidak ada kandidat
+        # OIL DROPLET DETECTION (enhanced mode)
+        #
+        # Oil in a spinning-drop tube should appear as a compact/elongated
+        # foreground component near the optical axis.  Instead of trusting
+        # the longest dark run on each scanline, isolate connected contours,
+        # reject border/large tube structures, and choose the most plausible
+        # centered component.  The measured diameter follows the requested
+        # scan orientation (vertical => droplet thickness).
+        #
+        # IMPORTANT: this path is only used when detection_mode="droplet".
+        # Wire Edge keeps the proven scanline method.  If no convincing oil
+        # contour is found, the legacy median scanline result below is used.
         # --------------------------------------------------------
 
-        if not diameter_candidates:
+        droplet_diameter_px: float | None = None
+        droplet_center_x: float | None = None
+        droplet_center_y: float | None = None
+        droplet_threshold_used: float | None = None
+
+        if detection_mode == "droplet":
+
+            # ----------------------------------------------------
+            # LIGHTING-ROBUST THRESHOLD CANDIDATES
+            #
+            # Keep the operator threshold as the primary candidate,
+            # but also evaluate two automatic thresholds. This makes
+            # Oil Edge more tolerant of camera exposure / room-light
+            # changes without removing the proven manual control.
+            # ----------------------------------------------------
+
+            threshold_candidates: list[tuple[str, float]] = [
+                ("manual", threshold),
+            ]
+
+            # Otsu chooses a threshold from the current ROI histogram.
+            otsu_flag = (
+                cv2.THRESH_BINARY_INV
+                if foreground == "dark"
+                else cv2.THRESH_BINARY
+            )
+            otsu_value, _ = cv2.threshold(
+                roi,
+                0,
+                255,
+                otsu_flag | cv2.THRESH_OTSU,
+            )
+
+            if math.isfinite(float(otsu_value)):
+                threshold_candidates.append(
+                    ("otsu", float(otsu_value))
+                )
+
+            # Percentile midpoint is intentionally simple and stable.
+            # For dark oil it separates the low-intensity tail from
+            # the local background; for light foreground the inverse.
+            low_percentile = float(
+                np.percentile(roi, 10.0)
+            )
+            high_percentile = float(
+                np.percentile(roi, 70.0)
+            )
+            adaptive_value = (
+                low_percentile + high_percentile
+            ) / 2.0
+
+            if math.isfinite(adaptive_value):
+                threshold_candidates.append(
+                    ("adaptive", adaptive_value)
+                )
+
+            # Deduplicate near-identical thresholds to avoid doing
+            # the same contour work several times.
+            unique_thresholds: list[tuple[str, float]] = []
+            for source_name, candidate_threshold in threshold_candidates:
+                candidate_threshold = max(
+                    0.0,
+                    min(255.0, float(candidate_threshold)),
+                )
+                if any(
+                    abs(candidate_threshold - existing) < 2.0
+                    for _, existing in unique_thresholds
+                ):
+                    continue
+                unique_thresholds.append(
+                    (source_name, candidate_threshold)
+                )
+
+            roi_center_x = roi_width / 2.0
+            roi_center_y = roi_height / 2.0
+            border_margin = 3
+            minimum_area = max(
+                12.0,
+                roi_width * roi_height * 0.00003,
+            )
+
+            previous_x: float | None = None
+            previous_y: float | None = None
+            previous_diameter: float | None = None
+
+            if tracking_hint:
+                try:
+                    previous_x = float(
+                        tracking_hint.get("center_x")
+                    )
+                    previous_y = float(
+                        tracking_hint.get("center_y")
+                    )
+                    previous_diameter = float(
+                        tracking_hint.get("diameter_px")
+                    )
+                except (TypeError, ValueError):
+                    previous_x = None
+                    previous_y = None
+                    previous_diameter = None
+
+            best_score: float | None = None
+            best_dimension: float | None = None
+            best_center: tuple[float, float] | None = None
+            best_threshold: float | None = None
+
+            kernel = cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE,
+                (3, 3),
+            )
+
+            for source_name, candidate_threshold in unique_thresholds:
+
+                if foreground == "dark":
+                    _, roi_binary = cv2.threshold(
+                        roi,
+                        candidate_threshold,
+                        255,
+                        cv2.THRESH_BINARY_INV,
+                    )
+                else:
+                    _, roi_binary = cv2.threshold(
+                        roi,
+                        candidate_threshold,
+                        255,
+                        cv2.THRESH_BINARY,
+                    )
+
+                cleaned = cv2.morphologyEx(
+                    roi_binary,
+                    cv2.MORPH_OPEN,
+                    kernel,
+                    iterations=1,
+                )
+                cleaned = cv2.morphologyEx(
+                    cleaned,
+                    cv2.MORPH_CLOSE,
+                    kernel,
+                    iterations=1,
+                )
+
+                contours_result = cv2.findContours(
+                    cleaned,
+                    cv2.RETR_EXTERNAL,
+                    cv2.CHAIN_APPROX_SIMPLE,
+                )
+                contours = (
+                    contours_result[0]
+                    if len(contours_result) == 2
+                    else contours_result[1]
+                )
+
+                for contour in contours:
+                    area = float(
+                        cv2.contourArea(contour)
+                    )
+
+                    if area < minimum_area:
+                        continue
+
+                    bx, by, bw, bh = cv2.boundingRect(
+                        contour
+                    )
+
+                    if bw < 3 or bh < 3:
+                        continue
+
+                    if (
+                        bx <= border_margin
+                        or by <= border_margin
+                        or bx + bw >= roi_width - border_margin
+                        or by + bh >= roi_height - border_margin
+                    ):
+                        continue
+
+                    if (
+                        bw >= roi_width * 0.70
+                        or bh >= roi_height * 0.70
+                    ):
+                        continue
+
+                    extent = area / float(
+                        max(bw * bh, 1)
+                    )
+
+                    if extent < 0.22:
+                        continue
+
+                    cx = bx + bw / 2.0
+                    cy = by + bh / 2.0
+
+                    normalized_dx = abs(
+                        cx - roi_center_x
+                    ) / max(
+                        roi_width / 2.0,
+                        1.0,
+                    )
+                    normalized_dy = abs(
+                        cy - roi_center_y
+                    ) / max(
+                        roi_height / 2.0,
+                        1.0,
+                    )
+
+                    if normalized_dy > 0.30:
+                        continue
+
+                    if normalized_dx > 0.40:
+                        continue
+
+                    dimension = float(
+                        bw
+                        if orientation == "horizontal"
+                        else bh
+                    )
+
+                    area_bonus = min(
+                        area / max(roi_width * roi_height * 0.01, 1.0),
+                        1.0,
+                    )
+
+                    score = (
+                        3.0 * normalized_dy
+                        + 1.5 * normalized_dx
+                        + (1.0 - min(extent, 1.0))
+                        - 0.35 * area_bonus
+                    )
+
+                    # Slightly prefer the explicit operator threshold when
+                    # it already produces an equally convincing contour.
+                    if source_name != "manual":
+                        score += 0.05
+
+                    # ------------------------------------------------
+                    # TEMPORAL TRACKING
+                    #
+                    # When a previous Oil contour exists, prefer candidates
+                    # close to its center and size. The penalties are soft,
+                    # so a real moving / flattening drop can still be followed.
+                    # ------------------------------------------------
+                    if (
+                        previous_x is not None
+                        and previous_y is not None
+                    ):
+                        track_dx = (cx - previous_x) / max(
+                            roi_width,
+                            1.0,
+                        )
+                        track_dy = (cy - previous_y) / max(
+                            roi_height,
+                            1.0,
+                        )
+                        track_distance = math.sqrt(
+                            track_dx * track_dx
+                            + track_dy * track_dy
+                        )
+                        score += 4.0 * track_distance
+
+                    if (
+                        previous_diameter is not None
+                        and previous_diameter > 0
+                    ):
+                        size_change = abs(
+                            dimension - previous_diameter
+                        ) / max(previous_diameter, 1.0)
+                        score += min(size_change, 2.0) * 0.65
+
+                    if (
+                        best_score is None
+                        or score < best_score
+                    ):
+                        best_score = score
+                        best_dimension = dimension
+                        best_center = (cx, cy)
+                        best_threshold = candidate_threshold
+
+            if (
+                best_dimension is not None
+                and math.isfinite(best_dimension)
+                and best_dimension > 0
+                and best_center is not None
+            ):
+                droplet_diameter_px = best_dimension
+                droplet_center_x = float(best_center[0])
+                droplet_center_y = float(best_center[1])
+                droplet_threshold_used = best_threshold
+
+        # --------------------------------------------------------
+        # Legacy scanline fallback / Wire Edge
+        # --------------------------------------------------------
+
+        if (
+            droplet_diameter_px is None
+            and not diameter_candidates
+        ):
 
             raise ValueError(
                 "no valid foreground object was found "
                 "inside the central camera ROI"
             )
 
-        # --------------------------------------------------------
-        # MEDIAN DIAMETER
-        #
-        # Lebih tahan terhadap satu scanline yang salah.
-        # --------------------------------------------------------
-
-        diameter_px = float(
-            median(
-                diameter_candidates
+        if droplet_diameter_px is not None:
+            diameter_px = float(
+                droplet_diameter_px
             )
-        )
+        else:
+            # Proven legacy behaviour: median of scanline candidates.
+            diameter_px = float(
+                median(
+                    diameter_candidates
+                )
+            )
 
         if (
             not math.isfinite(
@@ -1464,6 +1792,12 @@ class VisionAdapter:
             "diameter_px": (
                 diameter_px
             ),
+
+            # Internal metadata used only by the Oil Edge handler for
+            # temporal tracking. Existing graph outputs remain unchanged.
+            "_droplet_center_x": droplet_center_x,
+            "_droplet_center_y": droplet_center_y,
+            "_droplet_threshold_used": droplet_threshold_used,
         }
 
     # ============================================================
