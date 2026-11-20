@@ -1,0 +1,97 @@
+name: Build Windows Development
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-development-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-windows-dev:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install full build profile
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements-build.txt -r requirements-optional.txt
+
+      - name: Run tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Stamp development version
+        shell: pwsh
+        run: |
+          $shortSha = "${{ github.sha }}".Substring(0, 7)
+          $devVersion = "10.0.0-dev+$shortSha"
+
+          $init = Get-Content "pylabview/__init__.py" -Raw
+          $init = $init.Replace('__version__ = "10.0.0"', "__version__ = `"$devVersion`"")
+          Set-Content "pylabview/__init__.py" -Value $init -Encoding utf8 -NoNewline
+
+          Set-Content "VERSION" -Value $devVersion -Encoding ascii -NoNewline
+
+          $versionInfo = Get-Content "version_info.txt" -Raw
+          $versionInfo = $versionInfo.Replace("StringStruct(u'FileVersion', u'10.0.0')", "StringStruct(u'FileVersion', u'$devVersion')")
+          $versionInfo = $versionInfo.Replace("StringStruct(u'ProductVersion', u'10.0.0')", "StringStruct(u'ProductVersion', u'$devVersion')")
+          Set-Content "version_info.txt" -Value $versionInfo -Encoding utf8 -NoNewline
+
+          "DEV_VERSION=$devVersion" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Development source self-test
+        run: python -m pylabview --self-test-full
+
+      - name: Build development executable
+        run: python -m PyInstaller --noconfirm --clean PyLabViewStudioFull.spec
+
+      - name: Frozen development startup self-test
+        shell: pwsh
+        run: |
+          $process = Start-Process ".\dist\PyLabViewStudio.exe" -ArgumentList "--self-test-frozen" -PassThru
+          if (-not $process.WaitForExit(120000)) {
+            Stop-Process -Id $process.Id -Force
+            throw "Frozen development self-test timed out"
+          }
+          if ($process.ExitCode -ne 0) {
+            throw "Frozen development self-test failed with exit code $($process.ExitCode)"
+          }
+
+      - name: Prepare app-beta artifact
+        shell: pwsh
+        run: |
+          Copy-Item "dist/PyLabViewStudio.exe" "app-beta/PyLabViewStudio-dev.exe"
+          $hash = (Get-FileHash "app-beta/PyLabViewStudio-dev.exe" -Algorithm SHA256).Hash.ToLower()
+          "$hash  PyLabViewStudio-dev.exe" | Set-Content -Encoding ascii "app-beta/PyLabViewStudio-dev.exe.sha256"
+
+          @"
+          PyLabView Studio Development Build
+          Version: $env:DEV_VERSION
+          Commit: ${{ github.sha }}
+          Branch: ${{ github.ref_name }}
+          Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          Built at UTC: $((Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ"))
+
+          This is an automated development build, not a stable production release.
+          "@ | Set-Content -Encoding utf8 "app-beta/BUILD-INFO.txt"
+
+      - name: Upload development artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PyLabViewStudio-Development-${{ github.sha }}
+          path: app-beta/
+          if-no-files-found: error
+          retention-days: 30

@@ -2,6 +2,20 @@
 
 All notable user-facing changes to PyLabView Studio are recorded here.
 
+## Development
+
+### Added
+
+- Restored safe in-application switching between Standard Mode and Manual RPM Mode through the `Mode > Ganti Mode` command.
+- Added a separate Windows development-build workflow for every push to `main` and manual workflow dispatch.
+- Added an `app-beta` artifact layout containing `PyLabViewStudio-dev.exe`, SHA-256 checksum, build metadata, and usage documentation.
+- Added CI-only version stamping as `10.0.0-dev+<commit>` for both the application runtime and Windows executable details.
+
+### Changed
+
+- Development builds no longer require or move a stable release tag and do not replace assets attached to `v10.0.0`.
+- Mode switching uses Global Stop, waits for the runtime and Analysis queue, then creates a fresh workspace, runtime/controller, and session state before the next mode starts.
+
 ## [10.0.0] - 2026-11-20
 
 ### Added

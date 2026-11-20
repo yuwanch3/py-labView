@@ -8,7 +8,7 @@
 
 - `paths.py`: resolves bundled application resources separately from writable user data. In source mode, bundled resources resolve from the project root; in frozen mode they resolve from the PyInstaller bundle root. Writable application data is stored beneath `Documents\GMJ PyLabView`. Release 10.0.0 creates the top-level `Examples`, `Projects`, and `Sessions` directories. Legacy top-level `Captures` and `Measurement Exports` are no longer created by the spinning-drop workflow.
 
-- `startup_screen.py`, `app.py`: startup presentation and operating-mode selection. The user selects Standard Mode or Manual RPM Mode before the corresponding bundled project is loaded, and that selection remains fixed for the application launch. Changing mode requires a fresh launch so runtime, camera, serial, and session state cannot leak across operating modes. Startup logo and example-project lookup use bundled resource helpers so the same path model works in source and frozen builds.
+- `startup_screen.py`, `app.py`: startup presentation and operating-mode selection. The user selects Standard Mode or Manual RPM Mode before the corresponding bundled project is loaded. In-app mode switching first invokes the existing Global Stop path, waits for runtime and Analysis jobs, destroys the old workspace, constructs a fresh runtime/controller, clears session state, and returns to mode selection. Startup logo and example-project lookup use bundled resource helpers so the same path model works in source and frozen builds.
 
 - `app.py` owns the application-session lifecycle. One successful startup mode selection creates one folder:
   `Sessions\Session_YYYYMMDD_HHMMSS_Standard|Manual`.
@@ -128,5 +128,7 @@ The release artifact set remains:
 
 - `PyLabViewStudio.exe`
 - `PyLabViewStudio.exe.sha256`
+
+The separate `.github/workflows/dev-build.yml` workflow runs on `main` and manual dispatch. It stamps `10.0.0-dev+<commit>` only inside the CI workspace, builds and frozen-self-tests the executable, then uploads an `app-beta` artifact containing `PyLabViewStudio-dev.exe`, SHA-256 checksum, build metadata, and usage documentation. It does not create or move stable version tags and does not replace stable release assets.
 
 Build success, software self-tests, and syntax validation do not constitute physical hardware qualification, hard real-time certification, safety certification, or FPGA timing closure.

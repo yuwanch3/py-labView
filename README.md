@@ -10,7 +10,7 @@ PyLabView Studio 10.0.0 menyediakan workflow spinning-drop IFT dengan dua mode o
 
 - **Standard Mode**: menjalankan sequence RPM 1000 → 2000 → 3000 → 4000 → 5000 → 6000 RPM dengan kontrol PID pada Arduino dan stage otomatis.
 - **Manual RPM Mode**: operator menentukan target RPM hingga 6000 RPM, sedangkan PWM tetap dikendalikan otomatis oleh PID.
-- Mode operasi dipilih pada layar startup dan tetap aktif selama satu peluncuran aplikasi. Untuk mengganti Standard/Manual Mode, hentikan operasi dan buka ulang aplikasi agar setiap mode selalu dimulai dengan runtime, camera, serial, dan session state yang fresh.
+- **Ganti Mode** tersedia dari menu `Mode`. Aplikasi melakukan Global Stop, menunggu runtime dan Analysis worker selesai, menutup resource camera/serial, mereset workspace, lalu menampilkan kembali pemilihan Standard/Manual Mode dengan session state yang fresh.
 - Front Panel dan Block Diagram menyediakan scrollbar vertikal visual, selain navigasi mouse-wheel dan zoom yang sudah tersedia.
 - Front Panel Operate Mode menggunakan persistent rendering untuk live picture, Grafik Oil/Kawat, tabel, serta indikator berfrekuensi tinggi sehingga refresh runtime tidak membangun ulang seluruh canvas.
 - **Manual Target RPM spinner** mengubah target dalam langkah 250 RPM melalui tombol ▲/▼; tombol dapat ditahan untuk auto-repeat dan tetap dibatasi pada 1000–6000 RPM.
@@ -107,6 +107,17 @@ PyVISA memerlukan backend VISA, misalnya NI-VISA vendor runtime atau `pyvisa-py`
 
 Windows build tidak membundel driver vendor NI/VISA.
 
+## Development Build
+
+Setiap push ke branch `main` menjalankan workflow **Build Windows Development** tanpa membuat atau mengubah tag release stabil. Artifact disusun dalam folder `app-beta/` dan berisi:
+
+- `PyLabViewStudio-dev.exe`
+- `PyLabViewStudio-dev.exe.sha256`
+- `BUILD-INFO.txt`
+- petunjuk penggunaan development build
+
+Versi aplikasi dan detail Windows executable pada artifact diberi stamp `10.0.0-dev+<commit>`. Artifact tersedia selama 30 hari melalui GitHub Actions dan tidak mengganti `PyLabViewStudio.exe` pada release `v10.0.0`.
+
 ## Compatibility
 
 App version adalah **10.0.0**.
@@ -157,6 +168,8 @@ PyLabViewStudio.exe
 ```
 
 GitHub Actions melakukan unit test, full-profile source self-test, PyInstaller build, frozen startup self-test, checksum SHA-256, dan publish release.
+
+Workflow development melakukan validasi yang setara, tetapi hanya mengunggah artifact `app-beta` dan tidak menerbitkan stable GitHub Release.
 
 GitHub Release menyediakan:
 
