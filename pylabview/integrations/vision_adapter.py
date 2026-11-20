@@ -1435,82 +1435,16 @@ class VisionAdapter:
         droplet_center_x: float | None = None
         droplet_center_y: float | None = None
         droplet_threshold_used: float | None = None
+        droplet_confidence: float | None = None
+        droplet_major_axis_px: float | None = None
+        droplet_minor_axis_px: float | None = None
+        droplet_used_dynamic_roi = False
 
         if detection_mode == "droplet":
 
             # ----------------------------------------------------
-            # LIGHTING-ROBUST THRESHOLD CANDIDATES
-            #
-            # Keep the operator threshold as the primary candidate,
-            # but also evaluate two automatic thresholds. This makes
-            # Oil Edge more tolerant of camera exposure / room-light
-            # changes without removing the proven manual control.
+            # PREVIOUS-TRACK STATE
             # ----------------------------------------------------
-
-            threshold_candidates: list[tuple[str, float]] = [
-                ("manual", threshold),
-            ]
-
-            # Otsu chooses a threshold from the current ROI histogram.
-            otsu_flag = (
-                cv2.THRESH_BINARY_INV
-                if foreground == "dark"
-                else cv2.THRESH_BINARY
-            )
-            otsu_value, _ = cv2.threshold(
-                roi,
-                0,
-                255,
-                otsu_flag | cv2.THRESH_OTSU,
-            )
-
-            if math.isfinite(float(otsu_value)):
-                threshold_candidates.append(
-                    ("otsu", float(otsu_value))
-                )
-
-            # Percentile midpoint is intentionally simple and stable.
-            # For dark oil it separates the low-intensity tail from
-            # the local background; for light foreground the inverse.
-            low_percentile = float(
-                np.percentile(roi, 10.0)
-            )
-            high_percentile = float(
-                np.percentile(roi, 70.0)
-            )
-            adaptive_value = (
-                low_percentile + high_percentile
-            ) / 2.0
-
-            if math.isfinite(adaptive_value):
-                threshold_candidates.append(
-                    ("adaptive", adaptive_value)
-                )
-
-            # Deduplicate near-identical thresholds to avoid doing
-            # the same contour work several times.
-            unique_thresholds: list[tuple[str, float]] = []
-            for source_name, candidate_threshold in threshold_candidates:
-                candidate_threshold = max(
-                    0.0,
-                    min(255.0, float(candidate_threshold)),
-                )
-                if any(
-                    abs(candidate_threshold - existing) < 2.0
-                    for _, existing in unique_thresholds
-                ):
-                    continue
-                unique_thresholds.append(
-                    (source_name, candidate_threshold)
-                )
-
-            roi_center_x = roi_width / 2.0
-            roi_center_y = roi_height / 2.0
-            border_margin = 3
-            minimum_area = max(
-                12.0,
-                roi_width * roi_height * 0.00003,
-            )
 
             previous_x: float | None = None
             previous_y: float | None = None
@@ -1532,10 +1466,151 @@ class VisionAdapter:
                     previous_y = None
                     previous_diameter = None
 
+            # ----------------------------------------------------
+            # DYNAMIC ROI
+            #
+            # Search the full central ROI on first lock. Once a valid
+            # track exists, search a smaller window around the previous
+            # droplet. This reduces the chance of jumping to tube edges,
+            # shadows, or other dark objects while still allowing motion.
+            # Coordinates returned below remain relative to the original
+            # central ROI so the existing tracking_hint contract is kept.
+            # ----------------------------------------------------
+
+            search_roi = roi
+            search_offset_x = 0
+            search_offset_y = 0
+
+            if (
+                previous_x is not None
+                and previous_y is not None
+                and previous_diameter is not None
+                and previous_diameter > 0.0
+                and math.isfinite(previous_x)
+                and math.isfinite(previous_y)
+                and math.isfinite(previous_diameter)
+            ):
+                half_width = int(
+                    max(
+                        roi_width * 0.22,
+                        previous_diameter * 8.0,
+                        40.0,
+                    )
+                )
+                half_height = int(
+                    max(
+                        roi_height * 0.18,
+                        previous_diameter * 6.0,
+                        30.0,
+                    )
+                )
+
+                dynamic_left = max(
+                    0,
+                    int(round(previous_x)) - half_width,
+                )
+                dynamic_right = min(
+                    roi_width,
+                    int(round(previous_x)) + half_width,
+                )
+                dynamic_top = max(
+                    0,
+                    int(round(previous_y)) - half_height,
+                )
+                dynamic_bottom = min(
+                    roi_height,
+                    int(round(previous_y)) + half_height,
+                )
+
+                if (
+                    dynamic_right - dynamic_left >= 20
+                    and dynamic_bottom - dynamic_top >= 20
+                ):
+                    search_roi = roi[
+                        dynamic_top:dynamic_bottom,
+                        dynamic_left:dynamic_right,
+                    ]
+                    search_offset_x = dynamic_left
+                    search_offset_y = dynamic_top
+                    droplet_used_dynamic_roi = True
+
+            search_height = int(
+                search_roi.shape[0]
+            )
+            search_width = int(
+                search_roi.shape[1]
+            )
+
+            # ----------------------------------------------------
+            # LIGHTING-ROBUST THRESHOLD CANDIDATES
+            # ----------------------------------------------------
+
+            threshold_candidates: list[tuple[str, float]] = [
+                ("manual", threshold),
+            ]
+
+            otsu_flag = (
+                cv2.THRESH_BINARY_INV
+                if foreground == "dark"
+                else cv2.THRESH_BINARY
+            )
+            otsu_value, _ = cv2.threshold(
+                search_roi,
+                0,
+                255,
+                otsu_flag | cv2.THRESH_OTSU,
+            )
+
+            if math.isfinite(float(otsu_value)):
+                threshold_candidates.append(
+                    ("otsu", float(otsu_value))
+                )
+
+            low_percentile = float(
+                np.percentile(search_roi, 10.0)
+            )
+            high_percentile = float(
+                np.percentile(search_roi, 70.0)
+            )
+            adaptive_value = (
+                low_percentile + high_percentile
+            ) / 2.0
+
+            if math.isfinite(adaptive_value):
+                threshold_candidates.append(
+                    ("adaptive", adaptive_value)
+                )
+
+            unique_thresholds: list[tuple[str, float]] = []
+            for source_name, candidate_threshold in threshold_candidates:
+                candidate_threshold = max(
+                    0.0,
+                    min(255.0, float(candidate_threshold)),
+                )
+                if any(
+                    abs(candidate_threshold - existing) < 2.0
+                    for _, existing in unique_thresholds
+                ):
+                    continue
+                unique_thresholds.append(
+                    (source_name, candidate_threshold)
+                )
+
+            roi_center_x = roi_width / 2.0
+            roi_center_y = roi_height / 2.0
+            border_margin = 3
+            minimum_area = max(
+                12.0,
+                search_width * search_height * 0.00003,
+            )
+
             best_score: float | None = None
             best_dimension: float | None = None
             best_center: tuple[float, float] | None = None
             best_threshold: float | None = None
+            best_confidence: float | None = None
+            best_major_axis: float | None = None
+            best_minor_axis: float | None = None
 
             kernel = cv2.getStructuringElement(
                 cv2.MORPH_ELLIPSE,
@@ -1546,14 +1621,14 @@ class VisionAdapter:
 
                 if foreground == "dark":
                     _, roi_binary = cv2.threshold(
-                        roi,
+                        search_roi,
                         candidate_threshold,
                         255,
                         cv2.THRESH_BINARY_INV,
                     )
                 else:
                     _, roi_binary = cv2.threshold(
-                        roi,
+                        search_roi,
                         candidate_threshold,
                         255,
                         cv2.THRESH_BINARY,
@@ -1601,14 +1676,14 @@ class VisionAdapter:
                     if (
                         bx <= border_margin
                         or by <= border_margin
-                        or bx + bw >= roi_width - border_margin
-                        or by + bh >= roi_height - border_margin
+                        or bx + bw >= search_width - border_margin
+                        or by + bh >= search_height - border_margin
                     ):
                         continue
 
                     if (
-                        bw >= roi_width * 0.70
-                        or bh >= roi_height * 0.70
+                        bw >= search_width * 0.82
+                        or bh >= search_height * 0.82
                     ):
                         continue
 
@@ -1619,8 +1694,32 @@ class VisionAdapter:
                     if extent < 0.22:
                         continue
 
-                    cx = bx + bw / 2.0
-                    cy = by + bh / 2.0
+                    hull = cv2.convexHull(contour)
+                    hull_area = float(
+                        cv2.contourArea(hull)
+                    )
+                    solidity = (
+                        area / hull_area
+                        if hull_area > 0.0
+                        else 0.0
+                    )
+
+                    # Shape validation: reject ragged / fragmented objects.
+                    if solidity < 0.55:
+                        continue
+
+                    aspect_ratio = float(bw) / max(float(bh), 1.0)
+
+                    # Spinning-drop oil can be round at low RPM and strongly
+                    # elongated horizontally at high RPM. Only reject extreme
+                    # shapes that are implausible for the intended droplet.
+                    if aspect_ratio < 0.35 or aspect_ratio > 25.0:
+                        continue
+
+                    cx_local = bx + bw / 2.0
+                    cy_local = by + bh / 2.0
+                    cx = cx_local + search_offset_x
+                    cy = cy_local + search_offset_y
 
                     normalized_dx = abs(
                         cx - roi_center_x
@@ -1635,20 +1734,70 @@ class VisionAdapter:
                         1.0,
                     )
 
-                    if normalized_dy > 0.30:
+                    # Keep the proven central-axis guards. Dynamic ROI already
+                    # narrows the search after lock, but these remain a safety net.
+                    if normalized_dy > 0.35:
                         continue
 
-                    if normalized_dx > 0.40:
+                    if normalized_dx > 0.48:
                         continue
 
-                    dimension = float(
+                    bbox_dimension = float(
                         bw
                         if orientation == "horizontal"
                         else bh
                     )
 
+                    # ------------------------------------------------
+                    # ELLIPSE FITTING
+                    # ------------------------------------------------
+                    major_axis: float | None = None
+                    minor_axis: float | None = None
+                    ellipse_dimension: float | None = None
+
+                    if len(contour) >= 5:
+                        try:
+                            _ellipse_center, axes, _angle = cv2.fitEllipse(
+                                contour
+                            )
+                            axis_a = float(axes[0])
+                            axis_b = float(axes[1])
+                            major_axis = max(axis_a, axis_b)
+                            minor_axis = min(axis_a, axis_b)
+
+                            if (
+                                math.isfinite(major_axis)
+                                and math.isfinite(minor_axis)
+                                and major_axis > 0.0
+                                and minor_axis > 0.0
+                            ):
+                                ellipse_dimension = (
+                                    major_axis
+                                    if orientation == "horizontal"
+                                    else minor_axis
+                                )
+                            else:
+                                major_axis = None
+                                minor_axis = None
+                                ellipse_dimension = None
+                        except (cv2.error, TypeError, ValueError):
+                            major_axis = None
+                            minor_axis = None
+                            ellipse_dimension = None
+
+                    # Use ellipse size when it agrees reasonably with the
+                    # bounding-box measurement; otherwise keep the proven bbox.
+                    dimension = bbox_dimension
+                    ellipse_agrees = False
+
+                    if ellipse_dimension is not None:
+                        ratio = ellipse_dimension / max(bbox_dimension, 1.0)
+                        if 0.55 <= ratio <= 1.35:
+                            dimension = float(ellipse_dimension)
+                            ellipse_agrees = True
+
                     area_bonus = min(
-                        area / max(roi_width * roi_height * 0.01, 1.0),
+                        area / max(search_width * search_height * 0.01, 1.0),
                         1.0,
                     )
 
@@ -1656,21 +1805,16 @@ class VisionAdapter:
                         3.0 * normalized_dy
                         + 1.5 * normalized_dx
                         + (1.0 - min(extent, 1.0))
+                        + 0.7 * (1.0 - min(solidity, 1.0))
                         - 0.35 * area_bonus
                     )
 
-                    # Slightly prefer the explicit operator threshold when
-                    # it already produces an equally convincing contour.
                     if source_name != "manual":
                         score += 0.05
 
-                    # ------------------------------------------------
-                    # TEMPORAL TRACKING
-                    #
-                    # When a previous Oil contour exists, prefer candidates
-                    # close to its center and size. The penalties are soft,
-                    # so a real moving / flattening drop can still be followed.
-                    # ------------------------------------------------
+                    track_distance = None
+                    size_change = None
+
                     if (
                         previous_x is not None
                         and previous_y is not None
@@ -1698,6 +1842,61 @@ class VisionAdapter:
                         ) / max(previous_diameter, 1.0)
                         score += min(size_change, 2.0) * 0.65
 
+                    # ------------------------------------------------
+                    # CONFIDENCE SCORE (0..1)
+                    # ------------------------------------------------
+                    center_confidence = max(
+                        0.0,
+                        1.0 - min(
+                            1.0,
+                            normalized_dy / 0.35,
+                        ) * 0.65
+                        - min(
+                            1.0,
+                            normalized_dx / 0.48,
+                        ) * 0.35,
+                    )
+                    shape_confidence = max(
+                        0.0,
+                        min(
+                            1.0,
+                            0.55 * min(solidity, 1.0)
+                            + 0.45 * min(extent / 0.75, 1.0),
+                        ),
+                    )
+
+                    tracking_confidence = 1.0
+                    if track_distance is not None:
+                        tracking_confidence = max(
+                            0.0,
+                            1.0 - min(track_distance / 0.20, 1.0),
+                        )
+                    if size_change is not None:
+                        tracking_confidence *= max(
+                            0.0,
+                            1.0 - min(size_change / 0.60, 1.0) * 0.7,
+                        )
+
+                    ellipse_confidence = 1.0 if ellipse_agrees else 0.65
+                    threshold_confidence = 1.0 if source_name == "manual" else 0.95
+
+                    confidence = (
+                        0.30 * center_confidence
+                        + 0.30 * shape_confidence
+                        + 0.25 * tracking_confidence
+                        + 0.10 * ellipse_confidence
+                        + 0.05 * threshold_confidence
+                    )
+                    confidence = max(
+                        0.0,
+                        min(1.0, confidence),
+                    )
+
+                    # A low-confidence candidate can still serve as fallback,
+                    # but it must not beat a clearly stronger candidate solely
+                    # because of a tiny geometry-score difference.
+                    score += (1.0 - confidence) * 0.45
+
                     if (
                         best_score is None
                         or score < best_score
@@ -1706,6 +1905,9 @@ class VisionAdapter:
                         best_dimension = dimension
                         best_center = (cx, cy)
                         best_threshold = candidate_threshold
+                        best_confidence = confidence
+                        best_major_axis = major_axis
+                        best_minor_axis = minor_axis
 
             if (
                 best_dimension is not None
@@ -1717,6 +1919,9 @@ class VisionAdapter:
                 droplet_center_x = float(best_center[0])
                 droplet_center_y = float(best_center[1])
                 droplet_threshold_used = best_threshold
+                droplet_confidence = best_confidence
+                droplet_major_axis_px = best_major_axis
+                droplet_minor_axis_px = best_minor_axis
 
         # --------------------------------------------------------
         # Legacy scanline fallback / Wire Edge
@@ -1798,6 +2003,11 @@ class VisionAdapter:
             "_droplet_center_x": droplet_center_x,
             "_droplet_center_y": droplet_center_y,
             "_droplet_threshold_used": droplet_threshold_used,
+            "_droplet_confidence": droplet_confidence,
+            "_droplet_major_axis_px": droplet_major_axis_px,
+            "_droplet_minor_axis_px": droplet_minor_axis_px,
+            "_droplet_dynamic_roi": droplet_used_dynamic_roi,
+            "_raw_diameter_px": diameter_px,
         }
 
     # ============================================================

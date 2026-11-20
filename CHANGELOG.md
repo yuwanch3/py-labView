@@ -2,6 +2,38 @@
 
 All notable user-facing changes to PyLabView Studio are recorded here.
 
+## [10.0.0] - 2026-11-20
+
+### Added
+
+- Added tracked dynamic ROI search for Oil Edge after the first valid droplet lock, reducing false jumps to tube edges, shadows, and unrelated dark objects.
+- Added contour solidity and aspect-ratio validation plus optional ellipse fitting for more stable droplet dimension measurement.
+- Added bounded confidence scoring from center position, contour shape, temporal tracking, ellipse agreement, and threshold source.
+- Added Oil diameter temporal filtering with rolling history, robust median targeting, confidence-aware EMA smoothing, and low-confidence/outlier rejection.
+- Added automatic reacquisition after three consistent outlier frames so genuine droplet-size regime changes are accepted instead of remaining frozen on an old measurement.
+
+### Changed
+
+- Oil tracking now releases its dynamic ROI after repeated rejected frames and searches the full central ROI again.
+- Internal Oil Edge metadata now exposes raw diameter, smoothed diameter, confidence, fitted axes, dynamic-ROI usage, and outlier status without changing persisted project schema.
+- Operating mode is fixed for one application launch; switching between Standard and Manual Mode now requires a fresh launch to guarantee isolated runtime and hardware state.
+
+### Fixed
+
+- Preserved Arduino telemetry parsing for decimal elapsed-time packets and partial serial-line reassembly while integrating the new handler changes.
+- Prevented rejected Oil Edge outliers from moving the dynamic tracking ROI toward an incorrect object.
+
+### Compatibility
+
+- Application runtime, `VERSION`, Windows executable metadata, README, and architecture documentation are version 10.0.0.
+- Project schema remains version 3; existing schema-v3 projects and V1/v2 migration remain compatible.
+- Wire Edge retains the legacy scanline path, and Oil Edge retains scanline fallback when no convincing contour is found.
+
+### Validation
+
+- Full automated regression suite passes with 276 tests and 13 subtests.
+- Core and full optional-profile startup self-tests pass on Python 3.12.
+
 ## [9.5.0] - 2026-11-16
 
 ### Added
@@ -10,7 +42,7 @@ All notable user-facing changes to PyLabView Studio are recorded here.
 - Added `tracking_hint` temporal tracking parameter across `edge_intensity_profile` / `VisionAdapter.edge_detection` so center/diameter persist smoothly across frames.
 - Added `fit_to_view()` Front Panel startup behavior that fits content width to viewport (with 0.985× margin), applied only once at launch.
 - Added Manual RPM safety interlock: `manual_target_rpm` control is disabled while motor is running/START, preventing accidental target change during operation.
-- Added 100 ms runtime UI refresh interval (from 60 ms in v9.5.0) to reduce GDI/Front Panel work while retaining responsive telemetry presentation.
+- Added a 100 ms runtime UI refresh interval, replacing the previous 60 ms interval to reduce GDI/Front Panel work while retaining responsive telemetry presentation.
 - Added `_auto_fit_active` flag to suppress redraw during initial `fit_to_view` settle.
 - Added `_on_configure` canvas hook that auto-fits on first Configure event rather than immediate full redraw.
 
@@ -54,7 +86,7 @@ All notable user-facing changes to PyLabView Studio are recorded here.
 
 ### Compatibility
 
-- Application and Windows executable metadata are now version 9.5.0.
+- Application and Windows executable metadata are now version 9.0.0.
 - Project schema remains version 3; existing schema-v3 projects remain compatible and V1/v2 migration behavior is unchanged.
 
 ### Validation
@@ -246,6 +278,7 @@ All notable user-facing changes to PyLabView Studio are recorded here.
 
 - Project schema remains version 3.
 
+[10.0.0]: https://github.com/yuwanch3/py-labView/releases/tag/v10.0.0
 [9.5.0]: https://github.com/yuwanch3/py-labView/releases/tag/v9.5.0
 [8.0.0]: https://github.com/yuwanch3/py-labView/releases/tag/v8.0.0
 [7.9.0]: https://github.com/yuwanch3/py-labView/releases/tag/v7.9.0

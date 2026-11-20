@@ -1,4 +1,4 @@
-# Arsitektur PyLabView Studio 9.5.0
+# Arsitektur PyLabView Studio 10.0.0
 
 ## Boundaries
 
@@ -6,9 +6,9 @@
 
 - `execution.py`, `resources.py`, `runtime.py`: desktop CPython dataflow scheduler, cooperative cancellation, and session-owned handles. `DataflowRuntime` honors an explicitly supplied `data_root`; otherwise its writable runtime root defaults to the user data directory provided by `paths.py`, rather than the process working directory.
 
-- `paths.py`: resolves bundled application resources separately from writable user data. In source mode, bundled resources resolve from the project root; in frozen mode they resolve from the PyInstaller bundle root. Writable application data is stored beneath `Documents\GMJ PyLabView`. Release 9.5.0 creates the top-level `Examples`, `Projects`, and `Sessions` directories. Legacy top-level `Captures` and `Measurement Exports` are no longer created by the spinning-drop workflow.
+- `paths.py`: resolves bundled application resources separately from writable user data. In source mode, bundled resources resolve from the project root; in frozen mode they resolve from the PyInstaller bundle root. Writable application data is stored beneath `Documents\GMJ PyLabView`. Release 10.0.0 creates the top-level `Examples`, `Projects`, and `Sessions` directories. Legacy top-level `Captures` and `Measurement Exports` are no longer created by the spinning-drop workflow.
 
-- `startup_screen.py`, `app.py`: startup presentation and operating-mode selection. The user selects Standard Mode or Manual RPM Mode before the corresponding bundled project is loaded. Startup logo and example-project lookup use bundled resource helpers so the same path model works in source and frozen builds.
+- `startup_screen.py`, `app.py`: startup presentation and operating-mode selection. The user selects Standard Mode or Manual RPM Mode before the corresponding bundled project is loaded, and that selection remains fixed for the application launch. Changing mode requires a fresh launch so runtime, camera, serial, and session state cannot leak across operating modes. Startup logo and example-project lookup use bundled resource helpers so the same path model works in source and frozen builds.
 
 - `app.py` owns the application-session lifecycle. One successful startup mode selection creates one folder:
   `Sessions\Session_YYYYMMDD_HHMMSS_Standard|Manual`.
@@ -18,7 +18,7 @@
 
 - `handlers/`: typed `HandlerContext`, `NodeHandler` protocol, duplicate-safe registry, and category modules for all built-in node behavior. `DataflowRuntime._evaluate` resolves one handler and invokes it; it does not dispatch on node type.
 
-- `handlers/spinning_drop.py`: Standard Mode domain handlers for passive Arduino telemetry listening, START/STOP commands, ACK handling, `RPM:;PWM:;TIME:;TARGET:` telemetry, and `TARGET_RPM:` stage events parsed tolerantly from one stream. Telemetry target-change fallback accepts only the official Standard stages (1000 through 6000 RPM in 1000 RPM increments), preventing internal firmware ramp targets from becoming measurement-stage events. It also provides the PC-side RPM stall watchdog, event-driven stage-watcher table building, wire calibration, radius-form Vonnegut IFT, pycnometer/delta-density calculators, automatic 10-sample stage capture, reference/image behavior, and the shared stage-sample mechanism used by Manual Mode.
+- `handlers/spinning_drop.py`: Standard Mode domain handlers for passive Arduino telemetry listening, START/STOP commands, ACK handling, `RPM:;PWM:;TIME:;TARGET:` telemetry, and `TARGET_RPM:` stage events parsed tolerantly from one stream. Telemetry target-change fallback accepts only the official Standard stages (1000 through 6000 RPM in 1000 RPM increments), preventing internal firmware ramp targets from becoming measurement-stage events. Oil diameter processing maintains bounded history, rejects low-confidence/large-jump outliers, applies confidence-aware median/EMA smoothing, and reacquires after a repeated stable size change. It also provides the PC-side RPM stall watchdog, event-driven stage-watcher table building, wire calibration, radius-form Vonnegut IFT, pycnometer/delta-density calculators, automatic 10-sample stage capture, reference/image behavior, and the shared stage-sample mechanism used by Manual Mode.
 
 - `handlers/spinning_drop_manual.py`: Manual RPM Mode domain handlers. The PC selects Manual Mode and sends the requested target RPM, while PWM remains controlled by the Arduino PID. The handler consumes the same bounded serial telemetry stream and the `TARGET_REACHED:<rpm>` event. Manual measurement rows are published only after the shared 10-sample stage batch is complete.
 
@@ -30,11 +30,11 @@
 
 - For each accepted stage/Manual target, 10 raw stage images are captured at the existing sample interval. Each sample is paired with an Analysis request containing the corresponding display/analysis state. Analysis snapshots are stored separately from raw stage images.
 
-- `front_panel.py`: Tk presentation plus the off-screen Analysis renderer. Release 9.5.0 menambahkan pengoptimalan performa: `fit_to_view()` pada startup, interlock safety Manual RPM saat motor running, serta fitur `droplet` detection Oil Edge yang only aktif jika detection_mode=droplet. Persistent rendering tetap menjadi praktik utama untuk indikator berfrekuensi tinggi. Front Panel dan Block Diagram canvases expose visual vertical scrollbars while retaining their existing mouse-wheel and zoom behavior. Manual Target RPM has a bounded 250-RPM spinner with hold-to-repeat behavior. Front Panel drag/resize takes one undo checkpoint only after an actual geometry change. Runtime workers never call Tk directly.
+- `front_panel.py`: Tk presentation plus the off-screen Analysis renderer. Release 10.0.0 retains startup `fit_to_view()`, the Manual RPM safety interlock while the motor is running, persistent rendering for high-frequency indicators, visual canvas scrollbars, bounded 250-RPM spinner behavior, and one undo checkpoint per actual drag/resize. Runtime workers never call Tk directly.
 
 - `protocols.py`: bounded stdlib TCP/UDP and Modbus TCP FC01/02/03/04/05/06/15/16; pyserial loader remains compatibility API.
 
-- `integrations/`: optional capability/diagnostic, NI-DAQmx, VISA, OPC UA, vision, report, and plugin process adapters. Constructors accept backend injection and do not import optional packages at core startup.
+- `integrations/`: optional capability/diagnostic, NI-DAQmx, VISA, OPC UA, vision, report, and plugin process adapters. The Oil Edge vision path uses a tracked dynamic ROI, contour solidity/aspect validation, optional ellipse fitting, center/shape/tracking confidence scoring, and legacy scanline fallback. Constructors accept backend injection and do not import optional packages at core startup.
 
 - `hdl.py`: validated combinational graph-to-Verilog subset and optional bounded Yosys syntax subprocess.
 
@@ -74,7 +74,7 @@ Built-in definitions must have an explicit registered handler. A type absent fro
 
 ## Persistence
 
-Application release 9.5.0 deliberately keeps project schema version 3. New behavior is represented by existing schema-v3 nodes, handlers, properties, session infrastructure, and application-level UI/export behavior, so no schema migration is required.
+Application release 10.0.0 deliberately keeps project schema version 3. New behavior is represented by existing schema-v3 nodes, handlers, properties, session infrastructure, and application-level UI/export behavior, so no schema migration is required.
 
 V1/v2 projects continue to migrate to schema v3, and existing schema-v3 projects remain the persisted project format.
 
